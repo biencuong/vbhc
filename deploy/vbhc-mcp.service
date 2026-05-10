@@ -1,0 +1,15 @@
+[Unit]
+Description=VBHC MCP Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/mcp-soan-thao-vbhc
+Environment="VBHC_ORG_DIR=/root/.vbhc/org"
+Environment="PYTHONIOENCODING=utf-8"
+ExecStart=/home/mcp-soan-thao-vbhc/venv/bin/python /home/mcp-soan-thao-vbhc/mcp/server.py --http --host 127.0.0.1 --port 8765
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

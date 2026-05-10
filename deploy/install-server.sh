@@ -1,0 +1,176 @@
+#!/bin/bash
+# install-server.sh — Setup VBHC MCP server trên Ubuntu (idempotent)
+#
+# Usage (chạy với root hoặc sudo):
+#   cd /home/mcp-soan-thao-vbhc
+#   bash deploy/install-server.sh
+#
+# Hoặc 1-shot từ đầu (clone + setup):
+#   cd /home && git clone https://github.com/biencuong/vbhc.git mcp-soan-thao-vbhc \
+#       && bash mcp-soan-thao-vbhc/deploy/install-server.sh
+#
+# Script tự:
+#   1. Cài system packages (python3-full, python3-venv, apache2-utils)
+#   2. Tạo venv nếu chưa có
+#   3. Cài Python deps
+#   4. Tạo ORG dir + copy template YAML (skip nếu đã có)
+#   5. Tạo systemd service
+#   6. Enable + start service
+#   7. Verify
+#
+# Chạy lại lần thứ 2 sẽ skip các bước đã làm — an toàn.
+
+set -e
+
+# ===== Colors =====
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
+success() { echo -e "${GREEN}[OK]${NC}   $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
+error()   { echo -e "${RED}[ERR]${NC}  $*" >&2; exit 1; }
+
+# ===== Config =====
+SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ORG_DIR="${VBHC_ORG_DIR:-/root/.vbhc/org}"
+SERVICE_NAME="vbhc-mcp"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+HTTP_PORT="${VBHC_PORT:-8765}"
+HTTP_HOST="${VBHC_HOST:-127.0.0.1}"
+
+# ===== Pre-flight =====
+[ "$EUID" -eq 0 ] || error "Phải chạy với root hoặc sudo"
+[ -f "${SKILL_DIR}/mcp/server.py" ] || error "Không tìm thấy mcp/server.py — SKILL_DIR=${SKILL_DIR} có đúng không?"
+
+info "SKILL_DIR = ${SKILL_DIR}"
+info "ORG_DIR   = ${ORG_DIR}"
+info "Service   = ${SERVICE_NAME} (${HTTP_HOST}:${HTTP_PORT})"
+echo
+
+# ===== Step 1: System packages =====
+info "[1/7] Cài system packages..."
+NEED_PKG=()
+for pkg in python3-full python3-venv apache2-utils; do
+    if ! dpkg -s "$pkg" &>/dev/null; then
+        NEED_PKG+=("$pkg")
+    fi
+done
+if [ ${#NEED_PKG[@]} -gt 0 ]; then
+    apt update -qq
+    apt install -y "${NEED_PKG[@]}"
+    success "Đã cài: ${NEED_PKG[*]}"
+else
+    success "System packages đã có đủ"
+fi
+
+# ===== Step 2: venv =====
+info "[2/7] Tạo Python venv..."
+VENV_DIR="${SKILL_DIR}/venv"
+if [ ! -d "${VENV_DIR}" ]; then
+    python3 -m venv "${VENV_DIR}"
+    success "Đã tạo venv tại ${VENV_DIR}"
+else
+    success "venv đã có"
+fi
+
+# ===== Step 3: Python deps =====
+info "[3/7] Cài Python deps trong venv..."
+"${VENV_DIR}/bin/pip" install --upgrade pip --quiet
+"${VENV_DIR}/bin/pip" install --quiet mcp python-docx openpyxl pyyaml
+"${VENV_DIR}/bin/python" -c "import mcp, docx, openpyxl, yaml" \
+    || error "Verify deps fail — kiểm tra log pip"
+success "Deps OK"
+
+# ===== Step 4: ORG dir =====
+info "[4/7] Setup ORG dir tại ${ORG_DIR}..."
+if [ ! -f "${ORG_DIR}/05-thong-tin-co-quan.yaml" ]; then
+    mkdir -p "${ORG_DIR}"
+    cp "${SKILL_DIR}/tri-thuc-template/"*.yaml "${ORG_DIR}/"
+    success "Đã copy template YAML vào ${ORG_DIR}/"
+    warn   "→ NHỚ sửa các file YAML trong ${ORG_DIR}/ cho đúng cơ quan của bạn"
+else
+    success "ORG dir đã có file YAML (giữ nguyên)"
+fi
+
+# ===== Step 5: systemd service =====
+info "[5/7] Tạo systemd service ${SERVICE_FILE}..."
+SERVICE_CONTENT="$(cat <<EOF
+[Unit]
+Description=VBHC MCP Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${SKILL_DIR}
+Environment="VBHC_ORG_DIR=${ORG_DIR}"
+Environment="PYTHONIOENCODING=utf-8"
+ExecStart=${VENV_DIR}/bin/python ${SKILL_DIR}/mcp/server.py --http --host ${HTTP_HOST} --port ${HTTP_PORT}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+)"
+
+# Chỉ ghi file mới nếu nội dung khác (tránh re-trigger reload không cần thiết)
+if [ ! -f "${SERVICE_FILE}" ] || [ "$(cat "${SERVICE_FILE}")" != "${SERVICE_CONTENT}" ]; then
+    echo "${SERVICE_CONTENT}" > "${SERVICE_FILE}"
+    systemctl daemon-reload
+    success "Đã ghi service file + daemon-reload"
+else
+    success "Service file đã đúng (skip)"
+fi
+
+# ===== Step 6: Enable + start =====
+info "[6/7] Enable + start service..."
+systemctl enable "${SERVICE_NAME}" --quiet
+if systemctl is-active --quiet "${SERVICE_NAME}"; then
+    systemctl restart "${SERVICE_NAME}"
+    success "Service đã restart"
+else
+    systemctl start "${SERVICE_NAME}"
+    success "Service đã start"
+fi
+
+# Đợi 2s cho server khởi động
+sleep 2
+
+# ===== Step 7: Verify =====
+info "[7/7] Verify..."
+if systemctl is-active --quiet "${SERVICE_NAME}"; then
+    success "Service status: active"
+else
+    error "Service KHÔNG active. Xem log: journalctl -u ${SERVICE_NAME} -n 30 --no-pager"
+fi
+
+# Test HTTP
+HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://${HTTP_HOST}:${HTTP_PORT}/mcp" || echo "000")"
+case "${HTTP_CODE}" in
+    405|406|400)
+        success "HTTP test: ${HTTP_CODE} (server reach được, đúng response cho GET)"
+        ;;
+    000)
+        error "HTTP test: không kết nối được tới ${HTTP_HOST}:${HTTP_PORT}. Xem journalctl -u ${SERVICE_NAME}"
+        ;;
+    *)
+        warn "HTTP test: ${HTTP_CODE} (lạ — kiểm tra log)"
+        ;;
+esac
+
+echo
+success "DONE — VBHC MCP server đang chạy tại http://${HTTP_HOST}:${HTTP_PORT}/mcp"
+echo
+info "Bước tiếp theo:"
+echo "  1. Sửa file YAML trong ${ORG_DIR}/ cho đúng cơ quan"
+echo "  2. Restart service:    systemctl restart ${SERVICE_NAME}"
+echo "  3. Setup site + reverse proxy + SSL trong aaPanel (xem INSTALL-AAPANEL.md)"
+echo
+info "Quản lý service:"
+echo "  systemctl status ${SERVICE_NAME}"
+echo "  systemctl restart ${SERVICE_NAME}"
+echo "  journalctl -u ${SERVICE_NAME} -n 50 -f"
