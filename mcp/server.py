@@ -1137,21 +1137,34 @@ if __name__ == "__main__":
         print(f"[vbhc] ORG_DIR   = {ORG_DIR}", file=sys.stderr)
         print(f"[vbhc] API keys  = {keys_path} ({len(api_keys.keys)} key(s))", file=sys.stderr)
 
-        # FastMCP exposes Starlette ASGI app cho streamable-http transport
-        app = mcp.streamable_http_app()
-        app.add_middleware(APIKeyMiddleware, config=api_keys)
-
-        # Background flush last_used về YAML mỗi 60s (chạy trong event loop của uvicorn)
-        @app.on_event("startup")
-        async def _start_flush_task():
-            asyncio.create_task(periodic_flush(api_keys, 60))
-
-        @app.on_event("shutdown")
-        async def _flush_on_shutdown():
-            api_keys.flush()
-
         import asyncio
         import uvicorn
+        from contextlib import asynccontextmanager
+
+        # FastMCP exposes Starlette ASGI app cho streamable-http transport.
+        # Starlette 1.0 đã remove app.on_event — phải dùng lifespan context manager.
+        # Pattern: wrap lifespan gốc của FastMCP để gắn thêm periodic_flush task +
+        # flush on shutdown, KHÔNG break startup của StreamableHTTP session manager.
+        app = mcp.streamable_http_app()
+        original_lifespan = app.router.lifespan_context
+
+        @asynccontextmanager
+        async def lifespan(_app):
+            flush_task = asyncio.create_task(periodic_flush(api_keys, 60))
+            try:
+                async with original_lifespan(_app):
+                    yield
+            finally:
+                flush_task.cancel()
+                try:
+                    await flush_task
+                except asyncio.CancelledError:
+                    pass
+                api_keys.flush()
+
+        app.router.lifespan_context = lifespan
+        app.add_middleware(APIKeyMiddleware, config=api_keys)
+
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     else:
         # Default stdio transport (for local agents like Claude Code) — KHÔNG cần auth
