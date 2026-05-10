@@ -80,11 +80,21 @@ soan-thao-vbhc/
 
 ## Cài nhanh
 
-Cá nhân, 1 máy, Claude Code:
+### VPS Ubuntu + aaPanel (1 lệnh)
+
+```bash
+cd /home && \
+git clone https://github.com/biencuong/vbhc.git mcp-soan-thao-vbhc && \
+bash mcp-soan-thao-vbhc/deploy/install-server.sh
+```
+
+Script tự cài deps, tạo venv, ORG dir, systemd service, start + verify. Sau đó setup site + SSL + reverse proxy + auth trên aaPanel — xem **[INSTALL-AAPANEL.md](INSTALL-AAPANEL.md)**.
+
+### Cá nhân, 1 máy, Claude Code (Windows)
 
 ```bash
 # 1. Clone + deps
-git clone <repo-url> D:\SKILL_AI\skills\soan-thao-vbhc
+git clone https://github.com/biencuong/vbhc.git D:\SKILL_AI\skills\soan-thao-vbhc
 pip install mcp python-docx openpyxl pyyaml
 
 # 2. ORG dir + template
@@ -98,7 +108,7 @@ claude mcp add vbhc -s user -- python "D:\SKILL_AI\skills\soan-thao-vbhc\mcp\ser
 # 4. Restart Claude Code → test
 ```
 
-Đầy đủ chi tiết + Scenario B (server) + Scenario C (dev): xem **[INSTALL.md](INSTALL.md)**.
+Đầy đủ chi tiết: xem **[INSTALL.md](INSTALL.md)**.
 
 ## Nguyên tắc kỹ thuật quan trọng
 

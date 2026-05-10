@@ -6,6 +6,7 @@ Hướng dẫn cài và triển khai MCP `vbhc` trên 1 VPS Ubuntu đã có aaPa
 
 ## Mục lục
 
+- [⚡ Cài nhanh 1 lệnh (KHUYẾN NGHỊ)](#-cài-nhanh-1-lệnh-khuyến-nghị)
 - [0. Tổng quan kiến trúc](#0-tổng-quan-kiến-trúc)
 - [1. Yêu cầu trước khi bắt đầu](#1-yêu-cầu-trước-khi-bắt-đầu)
 - [2. Upload code lên VPS](#2-upload-code-lên-vps)
@@ -22,6 +23,47 @@ Hướng dẫn cài và triển khai MCP `vbhc` trên 1 VPS Ubuntu đã có aaPa
 - [11. Cấu hình client (máy người dùng)](#11-cấu-hình-client-máy-người-dùng)
 - [12. Vận hành sau cài đặt](#12-vận-hành-sau-cài-đặt)
 - [13. Troubleshooting](#13-troubleshooting)
+
+---
+
+## ⚡ Cài nhanh 1 lệnh (KHUYẾN NGHỊ)
+
+Phần Linux/MCP (Bước 1-5) đã được đóng gói thành script `deploy/install-server.sh`.
+**SSH vào VPS với root, chạy 1 lệnh:**
+
+```bash
+cd /home && \
+git clone https://github.com/biencuong/vbhc.git mcp-soan-thao-vbhc && \
+bash mcp-soan-thao-vbhc/deploy/install-server.sh
+```
+
+Script tự làm:
+1. `apt install python3-full python3-venv apache2-utils`
+2. Tạo venv `/home/mcp-soan-thao-vbhc/venv`
+3. `pip install mcp python-docx openpyxl pyyaml`
+4. Tạo ORG dir `/root/.vbhc/org/` + copy template YAML
+5. Ghi `/etc/systemd/system/vbhc-mcp.service` (path tự detect — KHÔNG lo indent/wrap khi copy-paste)
+6. `systemctl daemon-reload + enable + start`
+7. Test HTTP `127.0.0.1:8765/mcp` phải trả 405/406
+
+Output cuối thấy `[OK] DONE — VBHC MCP server đang chạy tại http://127.0.0.1:8765/mcp` → **Phần MCP server hoàn tất. Tiếp tục từ [Bước 4 sửa YAML cơ quan](#4-tạo-org-dir--sửa-yaml-cơ-quan) và [Bước 6 trỏ DNS + aaPanel](#6-trỏ-dns--tạo-site-trên-aapanel).**
+
+> **Update code lần sau (sau khi push thay đổi từ máy dev):**
+> ```bash
+> cd /home/mcp-soan-thao-vbhc && git pull && systemctl restart vbhc-mcp
+> ```
+> Hoặc nếu có thay đổi về deps/service:
+> ```bash
+> cd /home/mcp-soan-thao-vbhc && git pull && bash deploy/install-server.sh
+> ```
+> Script idempotent — chỉ làm phần thay đổi.
+
+> **Custom path/port** (nếu không dùng mặc định):
+> ```bash
+> VBHC_ORG_DIR=/etc/vbhc-org VBHC_PORT=8800 bash deploy/install-server.sh
+> ```
+
+Phần dưới (Bước 1-5 chi tiết) là **manual fallback** nếu bạn muốn hiểu từng bước hoặc khi script báo lỗi.
 
 ---
 
@@ -199,7 +241,19 @@ Chọn **5A** (systemd) hoặc **5B** (aaPanel Python Project Manager). Cả 2 �
 
 ### 5A. systemd (KHUYẾN NGHỊ)
 
-Tạo service file:
+> **Cách nhanh nhất**: dùng script ở [Cài nhanh 1 lệnh](#-cài-nhanh-1-lệnh-khuyến-nghị) đầu file. Phần dưới là cách thủ công nếu cần debug từng bước.
+
+**Cách 1 — copy file template từ repo (an toàn, không lỗi indent):**
+
+```bash
+cp /home/mcp-soan-thao-vbhc/deploy/vbhc-mcp.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now vbhc-mcp
+```
+
+> File `deploy/vbhc-mcp.service` mặc định path `/home/mcp-soan-thao-vbhc`. Nếu code ở folder khác, chỉnh `WorkingDirectory` + `ExecStart` trong `/etc/systemd/system/vbhc-mcp.service` rồi `systemctl daemon-reload`.
+
+**Cách 2 — heredoc (paste trong SSH, chú ý KHÔNG có space đầu dòng):**
 
 ```bash
 cat > /etc/systemd/system/vbhc-mcp.service <<'EOF'
@@ -223,6 +277,11 @@ EOF
 systemctl daemon-reload
 systemctl enable --now vbhc-mcp
 ```
+
+> **Lỗi thường gặp khi paste heredoc:**
+> - Dòng cuối `EOF` bị thụt space đầu → bash KHÔNG nhận là kết thúc, treo. Phải để `EOF` ở cột 0.
+> - Dòng `ExecStart` bị wrap thành 2 dòng do terminal hẹp → systemd báo "Failed to parse". Phải để 1 dòng dài.
+> - Nếu gặp 1 trong 2 lỗi trên → dùng Cách 1 (copy file) hoặc nano (xem [Bước 13 troubleshooting](#13-troubleshooting)).
 
 Verify:
 ```bash
@@ -628,15 +687,22 @@ Phải thấy 9 tools:
 
 ### 12.1. Update code
 
+**Cách nhanh — code-only (không có thay đổi deps/service):**
+```bash
+cd /home/mcp-soan-thao-vbhc && git pull && systemctl restart vbhc-mcp
+```
+
+**Cách full — re-run script (an toàn cho mọi thay đổi):**
+```bash
+cd /home/mcp-soan-thao-vbhc && git pull && bash deploy/install-server.sh
+```
+Script idempotent — chỉ apply phần thay đổi (deps mới, service file đổi, ORG dir thiếu...).
+
+**Cách thủ công:**
 ```bash
 cd /home/mcp-soan-thao-vbhc
-git pull          # nếu code từ git
-# Hoặc upload code mới qua aaPanel File Manager
-
-# Cài deps mới (nếu requirements thay đổi)
+git pull
 ./venv/bin/pip install -U mcp python-docx openpyxl pyyaml
-
-# Restart MCP service
 systemctl restart vbhc-mcp        # nếu dùng systemd (5A)
 # Hoặc: aaPanel → Python Project → click Restart hàng vbhc-mcp (nếu dùng 5B)
 ```
@@ -800,6 +866,29 @@ Nếu rối → khôi phục từ backup config aaPanel tự tạo:
 ```bash
 ls /www/server/panel/vhost/nginx/mcp.hagiang.edu.vn.conf*
 # Có thể có file .bak
+```
+
+### Heredoc paste fail — file service không tạo / `bash: warning: here-document delimited by end-of-file`
+
+Triệu chứng: bạn paste block `cat > ... <<'EOF' ... EOF` vào terminal, nhưng terminal hiện prompt `>` chờ tiếp, hoặc Ctrl+C xong `cat /etc/systemd/system/vbhc-mcp.service` báo "No such file".
+
+Nguyên nhân:
+- Dòng `EOF` cuối bị thụt space đầu (`  EOF` thay vì `EOF`) → bash KHÔNG nhận là kết thúc → treo
+- Dòng `ExecStart=...` bị wrap thành 2 dòng do terminal hẹp → systemd parse lỗi sau này
+
+Fix — dùng cách an toàn nhất (copy file từ repo):
+```bash
+cp /home/mcp-soan-thao-vbhc/deploy/vbhc-mcp.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now vbhc-mcp
+```
+
+Hoặc dùng `nano` (paste không lo wrap):
+```bash
+nano /etc/systemd/system/vbhc-mcp.service
+# Paste content từ deploy/vbhc-mcp.service, Ctrl+O, Enter, Ctrl+X
+systemctl daemon-reload
+systemctl enable --now vbhc-mcp
 ```
 
 ### Plugin Python Project Manager: project Stopped sau khi Add
