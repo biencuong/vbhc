@@ -1,0 +1,71 @@
+# ============================================================
+# THÔNG TIN CƠ QUAN — file cấu hình chung (TEMPLATE)
+# ============================================================
+# Copy file này vào ORG dir của bạn ($VBHC_ORG_DIR, default ~/.vbhc/org/)
+# rồi sửa các giá trị bên dưới cho phù hợp cơ quan của bạn.
+#
+# AI ĐỌC FILE NÀY MỖI LẦN soạn văn bản — không phải nhập lại.
+# ============================================================
+
+co_quan:
+  # Cơ quan ban hành VB (in hoa, đậm)
+  ten_day_du: "<TÊN CƠ QUAN BAN HÀNH ĐẦY ĐỦ>"      # vd: "SỞ GIÁO DỤC VÀ ĐÀO TẠO"
+  ten_viet_tat: "<MÃ VIẾT TẮT>"                    # vd: "SGDĐT"
+
+  # Cơ quan chủ quản (in hoa, không đậm)
+  co_quan_chu_quan: "<TÊN CƠ QUAN CHỦ QUẢN>"       # vd: "UBND TỈNH TUYÊN QUANG"
+
+  # Địa danh — nơi đặt trụ sở
+  dia_danh: "<TÊN ĐỊA DANH>"                       # vd: "Tuyên Quang"
+
+  # Quy ước viết tắt (giữ nguyên cho lĩnh vực giáo dục)
+  viet_tat:
+    giao_duc_va_dao_tao: "GDĐT"
+    bo_giao_duc_va_dao_tao: "Bộ GDĐT"
+    so_giao_duc_va_dao_tao: "Sở GDĐT"
+
+
+# ============================================================
+# DANH SÁCH NGƯỜI CÓ THẨM QUYỀN KÝ
+# ============================================================
+# AI HỎI USER chọn ai khi soạn VB. KHÔNG tự đoán.
+# ky_dang: "thuong" / "kt" / "tl" / "tuq"
+nguoi_ky:
+  - chuc_vu: "GIÁM ĐỐC"
+    ho_ten: "<HỌ TÊN GIÁM ĐỐC>"
+    ky_dang: "thuong"
+    ghi_chu: ""
+
+  - chuc_vu: "PHÓ GIÁM ĐỐC"
+    ho_ten: "<HỌ TÊN PHÓ GIÁM ĐỐC>"
+    ky_dang: "kt"
+    chuc_vu_thay: "GIÁM ĐỐC"
+    ghi_chu: "(điền lĩnh vực phụ trách nếu cần)"
+
+
+# ============================================================
+# DANH SÁCH PHÒNG / ĐƠN VỊ SOẠN THẢO
+# ============================================================
+# Lấy từ phan-cong-nhiem-vu.yaml (loại = phong_noi_bo)
+phong_soan_thao:
+  - ten_day_du: "Văn phòng Sở"
+    viet_tat: "VP"
+  # ... (xem phan-cong-nhiem-vu.yaml để có list đầy đủ)
+
+
+# ============================================================
+# CÀI ĐẶT MẶC ĐỊNH (NĐ 30/2020/NĐ-CP)
+# ============================================================
+cai_dat:
+  font: "Times New Roman"
+  co_chu_noi_dung: 13
+  co_chu_quoc_hieu: 12
+  co_chu_tieu_ngu: 14
+  co_chu_co_quan: 13
+  cach_dong_body: 1.5
+  spacing_truoc_sau_body_pt: 6
+  indent_dau_dong_cm: 1.1
+  le_tren_mm: 20
+  le_duoi_mm: 20
+  le_trai_mm: 30
+  le_phai_mm: 20

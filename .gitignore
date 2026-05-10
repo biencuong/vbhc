@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+build/
+dist/
+.eggs/
+
+# Virtual env
+venv/
+.venv/
+env/
+ENV/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Word/Office temp lock files
+~$*.docx
+~$*.doc
+~$*.xlsx
+
+# Logs
+*.log
+logs/
+
+# Local archives / backups
+*.zip
+*.tar.gz
+*.bak
+
+# Local secrets / env
+.env
+.env.local
+*.pem
+*.key
+htpasswd*
+
+# User work data — KHÔNG push
+# (Chỉ push code + template; data thật của cơ quan ở ORG dir bên ngoài)
+cong-viec/
+0-ky-thuat/
+1-tham-chieu/
+0-yeu-cau-goc/
+
+# OS-specific Python compile cache
+*.pyo
+*.pyd
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

@@ -1,0 +1,181 @@
+# ============================================================
+# PHÂN CÔNG NHIỆM VỤ — danh sách đơn vị + chức năng
+# ============================================================
+# AI ĐỌC FILE NÀY khi cần GỢI Ý NƠI NHẬN cho VB.
+# Khi user soạn VB liên quan lĩnh vực X → AI tìm đơn vị có chức năng X
+# → đề xuất user ĐƯA VÀO/ KHÔNG đưa vào nơi nhận.
+#
+# CẤU TRÚC: list các đơn vị (don_vi). Mỗi đơn vị có:
+#   ten:          Tên đầy đủ (dùng trong nơi nhận, KHÔNG ngoặc đơn)
+#   viet_tat:     Mã viết tắt (dùng trong "Lưu: VT, X")
+#   loai:         "phong_noi_bo" / "co_quan_cap_tren" / "co_quan_cung_cap" / "co_quan_truc_thuoc"
+#   chuc_nang:    List các lĩnh vực phụ trách (keyword để AI match)
+#   ghi_chu:      Tự do
+# ============================================================
+
+don_vi:
+  # ===== Phòng nội bộ Sở =====
+  - ten: "Văn phòng Sở"
+    viet_tat: "VP"
+    loai: "phong_noi_bo"
+    chuc_nang:
+      - "tổng hợp"
+      - "hành chính"
+      - "văn thư lưu trữ"
+      - "thi đua khen thưởng"
+      - "tài chính nội bộ"
+    ghi_chu: "Tham mưu tổng hợp, làm đầu mối"
+
+  - ten: "Phòng Tổ chức Cán bộ"
+    viet_tat: "TCCB"
+    loai: "phong_noi_bo"
+    chuc_nang:
+      - "tổ chức bộ máy"
+      - "biên chế"
+      - "tuyển dụng"
+      - "bổ nhiệm"
+      - "đào tạo bồi dưỡng cán bộ"
+
+  - ten: "Phòng Kế hoạch - Tài chính"
+    viet_tat: "KHTC"
+    loai: "phong_noi_bo"
+    chuc_nang:
+      - "kế hoạch ngân sách"
+      - "đầu tư công"
+      - "tài chính"
+      - "mua sắm tài sản"
+
+  - ten: "Phòng Giáo dục Mầm non"
+    viet_tat: "GDMN"
+    loai: "phong_noi_bo"
+    chuc_nang:
+      - "mầm non"
+      - "nhà trẻ"
+      - "mẫu giáo"
+      - "trẻ em dưới 6 tuổi"
+
+  - ten: "Phòng Giáo dục Phổ thông"
+    viet_tat: "GDPT"
+    loai: "phong_noi_bo"
+    chuc_nang:
+      - "tiểu học"
+      - "trung học cơ sở"
+      - "trung học phổ thông"
+      - "học bạ số"
+      - "chương trình giáo dục phổ thông"
+      - "đánh giá học sinh"
+
+  - ten: "Phòng Quản lý Chất lượng"
+    viet_tat: "QLCL"
+    loai: "phong_noi_bo"
+    chuc_nang:
+      - "kiểm định chất lượng"
+      - "thi tốt nghiệp"
+      - "tuyển sinh"
+      - "khảo thí"
+
+  - ten: "Phòng Khoa học Công nghệ - Công nghệ thông tin"
+    viet_tat: "KHCN-CNTT"
+    loai: "phong_noi_bo"
+    chuc_nang:
+      - "khoa học công nghệ"
+      - "công nghệ thông tin"
+      - "chuyển đổi số"
+      - "hệ thống thông tin"
+      - "an toàn thông tin"
+      - "đổi mới sáng tạo"
+
+  - ten: "Phòng Thanh tra"
+    viet_tat: "TTra"
+    loai: "phong_noi_bo"
+    chuc_nang:
+      - "thanh tra"
+      - "kiểm tra"
+      - "giải quyết khiếu nại tố cáo"
+      - "phòng chống tham nhũng"
+
+  # ===== Cơ quan cấp trên =====
+  - ten: "UBND tỉnh"
+    viet_tat: ""
+    loai: "co_quan_cap_tren"
+    chuc_nang:
+      - "tất cả lĩnh vực thuộc thẩm quyền tỉnh"
+    ghi_chu: "Cấp trên trực tiếp của Sở. BẮT BUỘC gửi khi báo cáo hoặc trình cấp tỉnh quyết định."
+
+  - ten: "Bộ GDĐT"
+    viet_tat: ""
+    loai: "co_quan_cap_tren"
+    chuc_nang:
+      - "tất cả lĩnh vực giáo dục đào tạo"
+    ghi_chu: "Cấp trên chuyên ngành. Gửi khi báo cáo Bộ hoặc phản hồi VB của Bộ."
+
+  # ===== Cơ quan cùng cấp (phối hợp) =====
+  - ten: "Sở Tài chính"
+    viet_tat: ""
+    loai: "co_quan_cung_cap"
+    chuc_nang:
+      - "ngân sách tỉnh"
+      - "kinh phí"
+      - "thẩm định tài chính"
+
+  - ten: "Sở Nội vụ"
+    viet_tat: ""
+    loai: "co_quan_cung_cap"
+    chuc_nang:
+      - "tổ chức bộ máy"
+      - "biên chế"
+      - "thi đua khen thưởng"
+      - "tôn giáo"
+
+  - ten: "Sở Tư pháp"
+    viet_tat: ""
+    loai: "co_quan_cung_cap"
+    chuc_nang:
+      - "thẩm định văn bản"
+      - "rà soát pháp luật"
+      - "tuyên truyền pháp luật"
+
+  - ten: "Sở Thông tin và Truyền thông"
+    viet_tat: ""
+    loai: "co_quan_cung_cap"
+    chuc_nang:
+      - "công nghệ thông tin"
+      - "an toàn thông tin"
+      - "chuyển đổi số"
+      - "báo chí xuất bản"
+
+  # ===== Cơ quan trực thuộc / cấp dưới =====
+  - ten: "Phòng Giáo dục và Đào tạo các huyện, thành phố"
+    viet_tat: ""
+    loai: "co_quan_truc_thuoc"
+    chuc_nang:
+      - "quản lý giáo dục cấp huyện"
+      - "tiểu học, trung học cơ sở"
+
+  - ten: "Các cơ sở giáo dục trực thuộc Sở"
+    viet_tat: ""
+    loai: "co_quan_truc_thuoc"
+    chuc_nang:
+      - "trường THPT"
+      - "trung tâm GDTX"
+      - "trường chuyên biệt"
+
+# ============================================================
+# QUY TẮC AI khi GỢI Ý NƠI NHẬN
+# ============================================================
+quy_tac_goi_y_noi_nhan:
+  # Bước 1: Đọc nội dung VB → trích keywords (lĩnh vực, hoạt động, đối tượng)
+  # Bước 2: Match keywords với chuc_nang của các don_vi
+  # Bước 3: Phân nhóm theo loai:
+  #   - co_quan_cap_tren: Báo cáo / xin ý kiến → đứng đầu
+  #   - co_quan_cung_cap: Phối hợp / thẩm định → đứng giữa
+  #   - co_quan_truc_thuoc: Thực hiện → đứng dưới
+  #   - phong_noi_bo: Lưu nội bộ → "Lưu: VT, X"
+  # Bước 4: HỎI user XÁC NHẬN từng nhóm.
+  # Bước 5: KHÔNG ghi mục đích trong ngoặc đơn (NĐ 30 không quy định).
+
+  thu_tu_uu_tien:
+    - "co_quan_cap_tren"
+    - "co_quan_cung_cap"
+    - "co_quan_truc_thuoc"
+    - "luu_noi_bo"

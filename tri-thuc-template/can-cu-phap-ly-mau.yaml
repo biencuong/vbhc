@@ -1,0 +1,71 @@
+# ============================================================
+# CĂN CỨ PHÁP LÝ — danh sách VB pháp lý mẫu của lĩnh vực
+# ============================================================
+# AI ĐỌC FILE NÀY khi cần VIỆN DẪN căn cứ pháp lý trong VB.
+# QUAN TRỌNG: User PHẢI tự maintain file này, đặc biệt mục `hieu_luc`.
+#
+# AI KHÔNG được tự bịa số/ngày VB từ training data.
+# Nếu VB cần viện dẫn không có trong file này → AI HỎI user cung cấp file gốc
+# hoặc cho phép diễn đạt general ("pháp luật hiện hành về X").
+# ============================================================
+
+# ===== Văn bản chung — soạn thảo VB =====
+soan_thao_vbhc:
+  - so_ky_hieu: "30/2020/NĐ-CP"
+    ten_vb: "Nghị định về công tác văn thư"
+    co_quan_ban_hanh: "Chính phủ"
+    ngay_ban_hanh: "2020-03-05"
+    hieu_luc: "con_hieu_luc"   # con_hieu_luc / het_hieu_luc / da_thay_the
+    ghi_chu: "Quy định thể thức VBHC"
+
+# ===== Giáo dục đào tạo (mẫu Sở GDĐT) =====
+giao_duc:
+  - so_ky_hieu: "43/2019/QH14"
+    ten_vb: "Luật Giáo dục"
+    co_quan_ban_hanh: "Quốc hội"
+    ngay_ban_hanh: "2019-06-14"
+    hieu_luc_tu: "2020-07-01"
+    hieu_luc: "con_hieu_luc"
+    ghi_chu: "Luật khung lĩnh vực giáo dục"
+
+  # ====== USER ĐIỀN TIẾP các căn cứ thường dùng của lĩnh vực ======
+  # - so_ky_hieu: "..."
+  #   ten_vb: "..."
+  #   co_quan_ban_hanh: "..."
+  #   ngay_ban_hanh: "YYYY-MM-DD"
+  #   hieu_luc: "con_hieu_luc"
+  #   ghi_chu: "..."
+
+# ===== Tổ chức bộ máy / biên chế =====
+to_chuc_bo_may:
+  # Vd:
+  # - so_ky_hieu: "62/2020/QH14"
+  #   ten_vb: "Luật Cán bộ, công chức (sửa đổi 2019)"
+  #   ...
+
+# ===== Tài chính / ngân sách =====
+tai_chinh_ngan_sach:
+  # Vd:
+  # - so_ky_hieu: "83/2015/QH13"
+  #   ten_vb: "Luật Ngân sách Nhà nước"
+  #   ngay_ban_hanh: "2015-06-25"
+  #   hieu_luc: "con_hieu_luc"
+
+# ===== Khoa học công nghệ / chuyển đổi số =====
+khcn_cds:
+  # Vd:
+  # - so_ky_hieu: "29/2018/QH14"
+  #   ten_vb: "Luật Bảo vệ bí mật nhà nước"
+  #   ...
+
+# ============================================================
+# QUY TẮC AI khi VIỆN DẪN căn cứ
+# ============================================================
+quy_tac_vien_dan:
+  # 1. CHỈ viện dẫn VB có trong file này VỚI hieu_luc=con_hieu_luc.
+  # 2. Nếu cần viện dẫn VB không có trong file → HỎI user:
+  #    "Văn bản X có còn hiệu lực không? Cho tôi xin file gốc để verify."
+  # 3. Nếu user không có thông tin → diễn đạt general:
+  #    "căn cứ pháp luật hiện hành về <lĩnh vực>"
+  # 4. KHÔNG bịa số/ngày VB từ trí nhớ training data.
+  # 5. Khi viện dẫn "Khoản X Điều Y" → PHẢI đã đọc file gốc verify nội dung.
