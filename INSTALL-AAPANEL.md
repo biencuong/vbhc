@@ -472,7 +472,10 @@ aaPanel mặc định bật `proxy_buffering` → MCP streamable-http (SSE) sẽ
 location ^~ /mcp {
     proxy_pass http://127.0.0.1:8765;
     proxy_http_version 1.1;
-    proxy_set_header Host              $host;
+    # Host = backend address để qua TrustedHostMiddleware của FastMCP/Starlette
+    # (nếu dùng $host = domain ngoài → server reject "Invalid Host header")
+    proxy_set_header Host              127.0.0.1:8765;
+    proxy_set_header X-Forwarded-Host  $host;
     proxy_set_header X-Real-IP         $remote_addr;
     proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
@@ -544,7 +547,10 @@ location ^~ /mcp {
 
     proxy_pass http://127.0.0.1:8765;
     proxy_http_version 1.1;
-    proxy_set_header Host              $host;
+    # Host = backend address để qua TrustedHostMiddleware của FastMCP/Starlette
+    # (nếu dùng $host = domain ngoài → server reject "Invalid Host header")
+    proxy_set_header Host              127.0.0.1:8765;
+    proxy_set_header X-Forwarded-Host  $host;
     proxy_set_header X-Real-IP         $remote_addr;
     proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
@@ -867,6 +873,25 @@ Nếu rối → khôi phục từ backup config aaPanel tự tạo:
 ls /www/server/panel/vhost/nginx/mcp.hagiang.edu.vn.conf*
 # Có thể có file .bak
 ```
+
+### Response body: `Invalid Host header`
+
+Triệu chứng: `curl -i -u admin:pass https://mcp.hagiang.edu.vn/mcp` trả 400 + body `Invalid Host header` (không phải 405/406 mong đợi).
+
+Nguyên nhân: FastMCP/Starlette có `TrustedHostMiddleware` mặc định chỉ accept Host header = `127.0.0.1` hoặc `localhost`. Khi nginx forward `Host: mcp.hagiang.edu.vn` (do `proxy_set_header Host $host;`) → middleware reject.
+
+Fix: sửa block `location ^~ /mcp` trong nginx config — dòng `proxy_set_header Host`:
+
+```nginx
+# Đổi từ:
+proxy_set_header Host              $host;
+
+# Thành:
+proxy_set_header Host              127.0.0.1:8765;
+proxy_set_header X-Forwarded-Host  $host;
+```
+
+Save → reload nginx. Test lại curl phải ra 405/406.
 
 ### Heredoc paste fail — file service không tạo / `bash: warning: here-document delimited by end-of-file`
 
