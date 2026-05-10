@@ -494,7 +494,8 @@ def add_so_vb_and_date_section(doc, *,
         p2 = left_cell.add_paragraph()
         p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
         set_paragraph_spacing(p2, before_pt=0, after_pt=0, line_pt=1.15, line_rule='auto')
-        add_run(p2, f"V/v {trich_yeu}", italic=True, size_pt=13)
+        # NĐ30: trích yếu V/v in THƯỜNG ĐỨNG, không nghiêng (chỉ địa danh-ngày italic)
+        add_run(p2, f"V/v {trich_yeu}", italic=False, size_pt=13)
 
     # Cell phải: Địa danh, ngày tháng năm
     # Rule (NĐ 30 + chính sách user): KHÔNG điền trước NGÀY ban hành (do VPHC điền khi ban hành).
@@ -604,19 +605,13 @@ def add_body_paragraph(doc, text: str, *, indent_first_cm: float = 1.1,
 def add_section_heading(doc, text: str, *, level: int = 1, italic: bool | None = None,
                         bold: bool | None = None,
                         indent_first_cm: float = 1.1):
-    """Section heading với 3 cấp:
-    - Cấp 1 (I., II., III.): bold, không nghiêng
-    - Cấp 2 (1., 2., 3.): bold, không nghiêng
-    - Cấp 3 (a), b), (i), (ii)): in thường, nghiêng
+    """Section heading: tất cả các cấp đều IN ĐẬM, KHÔNG NGHIÊNG (theo NĐ30).
 
     Args:
-        level: 1 / 2 / 3 — quyết định bold/italic mặc định
-        bold/italic: override mặc định nếu cần
+        level: 1 / 2 / 3 — chỉ để phân loại logic, không thay đổi style mặc định
+        bold/italic: override nếu cần (vd cố ý nghiêng cho 1 trường hợp đặc biệt)
     """
-    if level <= 2:
-        default_bold, default_italic = True, False
-    else:  # level >= 3
-        default_bold, default_italic = False, True
+    default_bold, default_italic = True, False
     if bold is None:
         bold = default_bold
     if italic is None:
@@ -631,26 +626,29 @@ def add_section_heading(doc, text: str, *, level: int = 1, italic: bool | None =
     return p
 
 
-def _apply_widow_compress(p, text: str, threshold_chars: int = 8):
-    """If text length suggests last line might end with 1-2 'mồ côi' words,
-    apply slight character spacing compression to fit better.
+def _apply_widow_compress(p, text: str, threshold_chars: int = 12):
+    """Tránh "từ mồ côi" (orphan words) — câu cuối khổ chỉ còn 1-2 từ ngắn.
 
-    Heuristic: if text length modulo (chars per line ≈ 80) is small and non-zero,
-    last line will be short. Apply -0.1pt spacing to all runs.
+    Heuristic: ước lượng số ký tự dòng cuối = len(text) % 75. Nếu trong khoảng
+    (0, threshold_chars*2] = (0, 24] → khả năng dòng cuối có 1-2 từ mồ côi rất
+    cao → nén char spacing -0.1pt cho TOÀN BỘ paragraph để dồn từ về dòng trên.
+
+    Threshold mặc định 12 (= 24 chars dòng cuối — tương đương 4-5 từ tiếng Việt
+    có dấu) đủ rộng để bắt phần lớn trường hợp thực tế.
     """
-    if len(text) < 100:
+    if len(text) < 80:
         return
-    chars_per_line_approx = 80
+    chars_per_line_approx = 75  # A4 lề 3-2 + indent 1.1 + cỡ 13pt ≈ 75 char/line
     last_line_chars = len(text) % chars_per_line_approx
     if 0 < last_line_chars <= threshold_chars * 2:
-        # Apply character spacing condensed -0.1pt = -2 twentieths
+        # Char spacing condensed -0.1pt = -2 twentieths of pt
         for r in p.runs:
             rPr = r._element.get_or_add_rPr()
             spacing = rPr.find(qn('w:spacing'))
             if spacing is None:
                 spacing = _make_element('w:spacing')
                 rPr.append(spacing)
-            spacing.set(qn('w:val'), '-2')  # -0.1pt
+            spacing.set(qn('w:val'), '-2')
 
 
 # ============================================================

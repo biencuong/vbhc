@@ -31,12 +31,14 @@ co_quan:
 # AI HỎI USER chọn ai khi soạn VB. KHÔNG tự đoán.
 # ky_dang: "thuong" / "kt" / "tl" / "tuq"
 nguoi_ky:
-  - chuc_vu: "GIÁM ĐỐC"
+  - id: "gd"
+    chuc_vu: "GIÁM ĐỐC"
     ho_ten: "<HỌ TÊN GIÁM ĐỐC>"
     ky_dang: "thuong"
     ghi_chu: ""
 
-  - chuc_vu: "PHÓ GIÁM ĐỐC"
+  - id: "pgd-1"
+    chuc_vu: "PHÓ GIÁM ĐỐC"
     ho_ten: "<HỌ TÊN PHÓ GIÁM ĐỐC>"
     ky_dang: "kt"
     chuc_vu_thay: "GIÁM ĐỐC"
@@ -48,24 +50,135 @@ nguoi_ky:
 # ============================================================
 # Lấy từ phan-cong-nhiem-vu.yaml (loại = phong_noi_bo)
 phong_soan_thao:
-  - ten_day_du: "Văn phòng Sở"
+  - id: "vp"
+    ten_day_du: "Văn phòng Sở"
     viet_tat: "VP"
-  # ... (xem phan-cong-nhiem-vu.yaml để có list đầy đủ)
+  - id: "gdtrh"
+    ten_day_du: "Phòng Giáo dục Trung học"
+    viet_tat: "GDTrH"
+  - id: "gdpt"
+    ten_day_du: "Phòng Giáo dục Phổ thông"
+    viet_tat: "GDPT"
+  # ... bổ sung theo phan-cong-nhiem-vu.yaml
 
 
 # ============================================================
-# CÀI ĐẶT MẶC ĐỊNH (NĐ 30/2020/NĐ-CP)
+# MAPPING LOẠI VB → MẶC ĐỊNH (người ký, phòng soạn, nơi nhận)
+# ============================================================
+# Khi user nói "soạn báo cáo X", AI tra mapping này:
+#   1. Tìm nguoi_ky_default theo `ky_dang` được ưu tiên
+#   2. Tìm phong_soan_default theo lĩnh vực
+#   3. Đề xuất nơi nhận chuẩn
+#   4. HỎI user xác nhận / chỉnh sửa, rồi lưu lại để lần sau dùng
+# Format danh sách nơi nhận theo NĐ30: KHÔNG dùng "(để báo cáo)"/"(để biết)" —
+# dùng "(b/c)" cho báo cáo cấp trên, hoặc bỏ chú thích.
+mac_dinh_theo_loai_vb:
+  bao-cao:
+    nguoi_ky_id: "gd"          # GĐ ký trực tiếp
+    phong_soan_id: "vp"
+    noi_nhan:
+      - "UBND tỉnh (b/c)"
+      - "Bộ chủ quản (b/c)"
+      - "Lãnh đạo cơ quan"
+      - "Các phòng, ban thuộc cơ quan"
+    cau_ket_mau: "Trên đây là báo cáo... của <cơ quan>, trân trọng báo cáo."
+
+  cong-van:
+    nguoi_ky_id: "gd"
+    phong_soan_id: "vp"
+    noi_nhan:
+      - "Như trên"
+      - "Lãnh đạo cơ quan"
+    cau_ket_mau: "<Cơ quan> trân trọng đề nghị / kính gửi / kính báo cáo."
+
+  to-trinh:
+    nguoi_ky_id: "gd"
+    phong_soan_id: "vp"
+    noi_nhan:
+      - "Như trên"
+      - "Lãnh đạo cơ quan"
+    cau_ket_mau: "<Cơ quan> kính trình <cấp trên> xem xét, quyết định."
+
+  ke-hoach:
+    nguoi_ky_id: "gd"
+    phong_soan_id: "vp"
+    noi_nhan:
+      - "UBND tỉnh (b/c)"
+      - "Bộ chủ quản (b/c)"
+      - "Lãnh đạo cơ quan"
+      - "Các phòng, ban thuộc cơ quan"
+    cau_ket_mau: "<Cơ quan> yêu cầu các phòng, ban tổ chức triển khai thực hiện."
+
+  thong-bao:
+    nguoi_ky_id: "pgd-1"       # thường PGĐ ký KT.
+    phong_soan_id: "vp"
+    noi_nhan:
+      - "Như trên"
+      - "Lãnh đạo cơ quan"
+
+  quyet-dinh:
+    nguoi_ky_id: "gd"
+    phong_soan_id: "vp"
+    noi_nhan:
+      - "Như Điều … (đối tượng QĐ)"
+      - "Lưu trữ"
+      - "Cá nhân được nêu tại Điều …"
+
+  phieu-ghi-y-kien:
+    # Biểu mẫu nội bộ — KHÔNG có nơi nhận/lưu
+    nguoi_ky_id: "gd"
+    phong_soan_id: null
+    noi_nhan: []
+
+
+# ============================================================
+# CÀI ĐẶT MẶC ĐỊNH (NĐ 30/2020/NĐ-CP — Phụ lục I)
 # ============================================================
 cai_dat:
   font: "Times New Roman"
-  co_chu_noi_dung: 13
-  co_chu_quoc_hieu: 12
-  co_chu_tieu_ngu: 14
-  co_chu_co_quan: 13
+  # Cỡ chữ chuẩn theo PL I NĐ30
+  co_chu_noi_dung: 13           # 13-14pt
+  co_chu_quoc_hieu: 13          # 12-13pt — chọn 13 (đúng cỡ chuẩn)
+  co_chu_tieu_ngu: 14           # 13-14pt
+  co_chu_co_quan: 13            # 12-13pt
+  co_chu_ten_loai: 14           # 14pt (BÁO CÁO, QUYẾT ĐỊNH, ...)
+  co_chu_trich_yeu: 14          # 14pt
+  co_chu_so_kyhieu: 13          # 13pt
+  co_chu_dia_danh_ngay: 13      # 13-14pt — chọn 13
+  co_chu_chuc_vu_ky: 13         # 13-14pt
+  co_chu_noi_nhan: 11           # 11pt (theo PL I)
+  # Khoảng cách
   cach_dong_body: 1.5
-  spacing_truoc_sau_body_pt: 6
+  spacing_truoc_sau_body_pt: 6  # body trước-sau 6pt
+  spacing_ngoai_body_pt: 0      # tiêu ngữ, trích yếu, ký, nơi nhận = 0pt
   indent_dau_dong_cm: 1.1
+  # Lề trang chuẩn ND30 (A4)
   le_tren_mm: 20
   le_duoi_mm: 20
   le_trai_mm: 30
   le_phai_mm: 20
+
+# ============================================================
+# QUY TẮC THỂ THỨC ND30 — phải tuân thủ khi gen VB
+# ============================================================
+quy_tac_nd30:
+  ky_tu_chuan:
+    # Một số file convert từ .doc cũ chứa "Ð" (U+00D0). Phải đổi sang "Đ" (U+0110).
+    Đ_dung: "Đ"     # U+0110
+    Đ_sai: "Ð"      # U+00D0 — block, replace
+  loi_chinh_ta_pho_bien:
+    "kính giửi": "kính gửi"
+    "đả thông qua": "đã thông qua"
+  ky_hieu_loai_vb:
+    # Theo PL I — ký hiệu loại VB sau dấu /
+    bao-cao: "BC"
+    quyet-dinh: "QĐ"
+    nghi-quyet: "NQ"
+    chi-thi: "CT"
+    thong-bao: "TB"
+    huong-dan: "HD"
+    ke-hoach: "KH"
+    to-trinh: "TTr"
+    bien-ban: "BB"
+    cong-van: ""    # CV không có ký hiệu loại
+  ky_hieu_kt_thuc_vb: "./."   # đặt cuối câu kết thúc nội dung VB

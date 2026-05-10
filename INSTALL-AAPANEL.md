@@ -34,19 +34,21 @@ Phần Linux/MCP (Bước 1-5) đã được đóng gói thành script `deploy/i
 ```bash
 cd /home && \
 git clone https://github.com/biencuong/vbhc.git mcp-soan-thao-vbhc && \
-bash mcp-soan-thao-vbhc/deploy/install-server.sh
+cd mcp-soan-thao-vbhc && git checkout v0.9.0 && \
+bash deploy/install-server.sh
 ```
 
 Script tự làm:
 1. `apt install python3-full python3-venv apache2-utils`
 2. Tạo venv `/home/mcp-soan-thao-vbhc/venv`
-3. `pip install mcp python-docx openpyxl pyyaml`
-4. Tạo ORG dir `/root/.vbhc/org/` + copy template YAML
-5. Ghi `/etc/systemd/system/vbhc-mcp.service` (path tự detect — KHÔNG lo indent/wrap khi copy-paste)
+3. `pip install mcp python-docx openpyxl pyyaml uvicorn`
+4. Tạo ORG dir `/root/.vbhc/org/` + copy template YAML + **sinh 1 API key admin random** (chmod 600)
+5. Ghi `/etc/systemd/system/vbhc-mcp.service` với env `VBHC_API_KEYS_FILE`
 6. `systemctl daemon-reload + enable + start`
-7. Test HTTP `127.0.0.1:8765/mcp` phải trả 405/406
+7. Test HTTP `127.0.0.1:8765/mcp` phải trả 401 (do API key middleware reject request không Bearer header)
 
-Output cuối thấy `[OK] DONE — VBHC MCP server đang chạy tại http://127.0.0.1:8765/mcp` → **Phần MCP server hoàn tất. Tiếp tục từ [Bước 4 sửa YAML cơ quan](#4-tạo-org-dir--sửa-yaml-cơ-quan) và [Bước 6 trỏ DNS + aaPanel](#6-trỏ-dns--tạo-site-trên-aapanel).**
+Output cuối phải in **KEY ADMIN** — **LƯU LẠI NGAY** để cấp cho client. Sau đó tiếp tục từ
+[Bước 4 sửa YAML cơ quan](#4-tạo-org-dir--sửa-yaml-cơ-quan) và [Bước 6 trỏ DNS + aaPanel](#6-trỏ-dns--tạo-site-trên-aapanel).
 
 > **Update code lần sau (sau khi push thay đổi từ máy dev):**
 > ```bash
@@ -80,21 +82,26 @@ Phần dưới (Bước 1-5 chi tiết) là **manual fallback** nếu bạn mu�
               │                         │
               │  nginx (port 443)       │
               │   ├─ SSL (Let's Encrypt) │
-              │   ├─ Basic Auth          │
               │   └─ proxy_pass ──┐      │
               │                   ▼      │
               │   MCP server: 127.0.0.1:8765
               │   (systemd: vbhc-mcp.service)
+              │   ★ API key middleware (Bearer)
               │                         │
               │   ORG dir: /root/.vbhc/org/
-              │   (YAML config cơ quan)  │
+              │   ├─ YAML config cơ quan │
+              │   └─ api-keys.yaml (chmod 600)
               └─────────────────────────┘
 ```
 
-**Phân vai trò:**
-- **MCP server**: nghe localhost port 8765 — không expose ra Internet trực tiếp
-- **nginx (do aaPanel quản lý)**: terminate HTTPS, kiểm tra Basic Auth, forward request về MCP server
-- **aaPanel UI**: quản lý site, SSL, reverse proxy
+**Phân vai trò (v0.9.0+):**
+- **MCP server**: nghe localhost port 8765 — không expose ra Internet trực tiếp.
+  **Tự kiểm `Authorization: Bearer <key>`** qua Starlette middleware (file `mcp/auth.py`).
+- **nginx (do aaPanel quản lý)**: terminate HTTPS + reverse proxy. **KHÔNG còn Basic Auth** —
+  mỗi client cấp 1 API key riêng, server check.
+- **aaPanel UI**: quản lý site, SSL, reverse proxy.
+
+> **Migration từ phiên bản cũ Basic Auth**: xem [MIGRATION-v0.9.md](MIGRATION-v0.9.md).
 
 ---
 
@@ -530,76 +537,78 @@ curl -i https://mcp.hagiang.edu.vn/mcp
 
 ---
 
-## 9. Bật Basic Auth
+## 9. Cấp API key cho client
 
-Domain công khai = ai cũng gọi được tools. **Phải có auth.** aaPanel không có UI cho Basic Auth nginx, làm qua terminal.
+Domain công khai = ai cũng gọi được tools. **Phải có auth.** Từ v0.9.0 dùng API key
+(Bearer token) thay Basic Auth — mỗi máy 1 key riêng, có thể revoke / IP whitelist /
+rate limit độc lập.
 
-### 9.1. Tạo password file
+> **KHÔNG cần** thêm `auth_basic` vào nginx config nữa — server tự kiểm.
+
+### 9.1. Key admin đã có
+
+Installer (Bước 5/Cài nhanh) đã sinh sẵn 1 key `admin`. File:
 
 ```bash
-# apache2-utils đã cài ở Bước 3
-htpasswd -c /www/server/nginx/conf/htpasswd-vbhc admin
-# New password: <gõ password mạnh, không hiện ra>
-# Re-type new password: ...
-# Adding password for user admin
+cat /root/.vbhc/org/api-keys.yaml
 ```
 
-> **Password mạnh**: ≥ 16 ký tự, mix chữ + số + ký tự đặc biệt. Vd: `openssl rand -base64 24`.
+Phải thấy 1 entry với `id: admin`, `key: vbhc_<64hex>`. Nếu chưa lưu key, lấy lại từ file
+này hoặc dùng `manage_keys.py rotate admin` (tạo key mới, vô hiệu key cũ).
 
-> **Thêm user thứ 2** (KHÔNG có `-c` để khỏi xóa file cũ):
-> ```bash
-> htpasswd /www/server/nginx/conf/htpasswd-vbhc user2
-> ```
+### 9.2. Cấp key cho từng máy/người dùng
 
-### 9.2. Thêm 2 dòng vào nginx config
+Dùng CLI `manage_keys.py`:
 
-Quay lại aaPanel → site → **Configuration file** → trong block `location ^~ /mcp` đã tạo ở Bước 8, **thêm 2 dòng** ngay đầu block (trên dòng `proxy_pass`):
-
-```nginx
-    auth_basic           "VBHC MCP";
-    auth_basic_user_file /www/server/nginx/conf/htpasswd-vbhc;
-```
-
-Block hoàn chỉnh sẽ trông như:
-
-```nginx
-location ^~ /mcp {
-    auth_basic           "VBHC MCP";
-    auth_basic_user_file /www/server/nginx/conf/htpasswd-vbhc;
-
-    proxy_pass http://127.0.0.1:8765;
-    proxy_http_version 1.1;
-    # Host = backend address để qua TrustedHostMiddleware của FastMCP/Starlette
-    # (nếu dùng $host = domain ngoài → server reject "Invalid Host header")
-    proxy_set_header Host              127.0.0.1:8765;
-    proxy_set_header X-Forwarded-Host  $host;
-    proxy_set_header X-Real-IP         $remote_addr;
-    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header Connection        "";
-
-    proxy_buffering         off;
-    proxy_request_buffering off;
-    proxy_cache             off;
-    chunked_transfer_encoding on;
-
-    proxy_read_timeout 86400s;
-    proxy_send_timeout 86400s;
-}
-```
-
-**Save**.
-
-Nếu aaPanel UI không reload tự động:
 ```bash
-/etc/init.d/nginx reload
+cd /home/mcp-soan-thao-vbhc
+
+# Thêm key cơ bản
+./venv/bin/python scripts/manage_keys.py add laptop-an --description "An laptop"
+
+# Thêm key có IP whitelist + rate limit
+./venv/bin/python scripts/manage_keys.py add may-vt \
+    --description "Máy văn thư phòng VT" \
+    --ips 192.168.1.50 \
+    --rate-limit 60
 ```
 
-> **Lưu ý:** aaPanel dùng nginx riêng, KHÔNG có systemd unit. Đừng gõ `systemctl reload nginx` — sẽ báo "Unit not found". Chỉ dùng `/etc/init.d/nginx reload` hoặc `/www/server/nginx/sbin/nginx -s reload`.
+Output sẽ in `vbhc_<64hex>` — **lưu lại để cấp cho người dùng tương ứng** (vẫn còn trong yaml,
+nhưng tránh phải xem yaml mỗi lần).
 
-### 9.3. (Tùy chọn) Whitelist IP
+Liệt kê tất cả keys (mask một phần):
+```bash
+./venv/bin/python scripts/manage_keys.py list
+```
 
-Nếu muốn thêm 1 lớp bảo vệ — chỉ vài IP mới truy cập được — thêm vào đầu block `location ^~ /mcp`:
+### 9.3. Apply: restart MCP service
+
+Server cache config khi start. Sau khi sửa keys:
+```bash
+systemctl restart vbhc-mcp
+journalctl -u vbhc-mcp -n 5
+# Phải thấy: "API keys = .../api-keys.yaml (N key(s))"  với N = số key trong yaml
+```
+
+### 9.4. Quản lý keys hằng ngày
+
+```bash
+# Vô hiệu 1 key (vẫn giữ trong yaml)
+./venv/bin/python scripts/manage_keys.py revoke laptop-an
+
+# Đổi key mới (giữ id, sinh key random mới — key cũ KHÔNG còn tác dụng)
+./venv/bin/python scripts/manage_keys.py rotate laptop-an
+
+# Xoá hẳn khỏi yaml
+./venv/bin/python scripts/manage_keys.py delete laptop-an
+```
+
+> Sau bất kỳ thao tác nào → `systemctl restart vbhc-mcp` để apply.
+
+### 9.5. (Tuỳ chọn) IP whitelist cấp nginx
+
+Nếu muốn thêm 1 lớp bảo vệ ở mức nginx (lọc trước khi vào server) — thêm vào đầu block
+`location ^~ /mcp` trong **Configuration file**:
 
 ```nginx
     allow 123.45.67.89;        # IP cơ quan
@@ -607,81 +616,70 @@ Nếu muốn thêm 1 lớp bảo vệ — chỉ vài IP mới truy cập đượ
     deny  all;
 ```
 
-Lưu ý thứ tự: `allow`/`deny` phải ở TRƯỚC `auth_basic`.
+Phương án này áp dụng cho mọi client. Nếu muốn whitelist riêng từng key, dùng `--ips`
+trong `manage_keys.py add` (Bước 9.2) — granular hơn.
 
 ---
 
 ## 10. Verify end-to-end
 
 ```bash
-# Test 1: Không credentials → phải 401
+# Test 1: Không Authorization header → 401
 curl -i https://mcp.hagiang.edu.vn/mcp
 ```
 Phải thấy:
 ```
 HTTP/2 401
-www-authenticate: Basic realm="VBHC MCP"
+www-authenticate: Bearer realm="vbhc"
+{"error":"Missing 'Authorization: Bearer <key>' header"}
 ```
 
 ```bash
-# Test 2: Có credentials → phải 405/406 (server reach được, method GET không hợp lệ)
-curl -i -u admin:YOUR_PASSWORD https://mcp.hagiang.edu.vn/mcp
+# Test 2: Sai key → 401
+curl -i -H "Authorization: Bearer vbhc_wrong" https://mcp.hagiang.edu.vn/mcp
 ```
-Phải thấy:
-```
-HTTP/2 405   (hoặc 406)
-```
+Phải thấy: `HTTP/2 401` + `{"error":"Invalid API key"}`.
 
 ```bash
-# Test 3: POST JSON-RPC initialize → server response
-curl -N -u admin:YOUR_PASSWORD -X POST https://mcp.hagiang.edu.vn/mcp \
+# Test 3: Đúng key → 405/406 (server reach OK, method GET không hợp lệ cho MCP)
+curl -i -H "Authorization: Bearer vbhc_<key-từ-bước-9>" https://mcp.hagiang.edu.vn/mcp
+```
+Phải thấy: `HTTP/2 405` (hoặc 406).
+
+```bash
+# Test 4: POST JSON-RPC initialize → server response
+curl -N -X POST https://mcp.hagiang.edu.vn/mcp \
+     -H "Authorization: Bearer vbhc_<key>" \
      -H "Content-Type: application/json" \
      -H "Accept: application/json, text/event-stream" \
      -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}'
 ```
-Phải thấy stream JSON về với info server, tools list, ... → **Server hoàn toàn OK.**
+Phải thấy stream JSON về với info server, 11 tools list, ... → **Server hoàn toàn OK.**
 
-3 test pass → có thể chuyển sang config client.
+4 test pass → có thể chuyển sang config client.
 
 ---
 
 ## 11. Cấu hình client (máy người dùng)
 
-Trên máy mỗi user (Windows/Mac), trong agent (Claude Code, Cursor, Cline, qwenpaw...):
+Trên máy mỗi user, trong agent (Claude Code, Cursor, Cline, Claude Desktop...):
+**dùng `Authorization: Bearer <api-key>`**.
 
-### Cách 1 — credentials trong URL (đơn giản)
-
-```json
-{
-  "mcpServers": {
-    "vbhc": {
-      "url": "https://admin:YOUR_PASSWORD@mcp.hagiang.edu.vn/mcp"
-    }
-  }
-}
-```
-
-### Cách 2 — Authorization header (an toàn hơn, nếu agent hỗ trợ)
-
-Tạo chuỗi base64:
-```bash
-echo -n "admin:YOUR_PASSWORD" | base64
-# Vd: YWRtaW46WU9VUl9QQVNTV09SRA==
-```
-
-Config:
 ```json
 {
   "mcpServers": {
     "vbhc": {
       "url": "https://mcp.hagiang.edu.vn/mcp",
       "headers": {
-        "Authorization": "Basic YWRtaW46WU9VUl9QQVNTV09SRA=="
+        "Authorization": "Bearer vbhc_<key-cấp-cho-máy-này>"
       }
     }
   }
 }
 ```
+
+> **Mỗi máy 1 key riêng**. Admin cấp key qua `manage_keys.py add <id>` (xem Bước 9).
+> Nếu mất key, admin chạy `manage_keys.py rotate <id>` để tạo key mới.
 
 ### File config theo agent
 
@@ -689,14 +687,15 @@ Config:
 |---|---|
 | Claude Desktop (Win) | `%APPDATA%\Claude\claude_desktop_config.json` |
 | Claude Desktop (Mac) | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Claude Code | `claude mcp add vbhc -s user --transport http --url https://...` (kiểm tra version) hoặc sửa `~/.claude.json` |
+| Claude Code | `claude mcp add vbhc -s user --transport http --url https://...` hoặc sửa `~/.claude.json` |
 | Cursor | `~/.cursor/mcp.json` |
-| Cline | UI Settings → MCP Servers → Add |
+| Cline | UI Settings → MCP Servers → Add → headers `Authorization: Bearer ...` |
 
-Restart agent. Test:
+Restart agent. Test trong agent:
 > "Liệt kê các tool MCP `vbhc_*` bạn có"
 
-Phải thấy 9 tools:
+Phải thấy **11 tools**:
+
 1. `vbhc_classify`
 2. `vbhc_create_workfolder`
 3. `vbhc_reorganize`
@@ -706,6 +705,8 @@ Phải thấy 9 tools:
 7. `vbhc_regenerate_check`
 8. `vbhc_load_org_config`
 9. `vbhc_suggest_noi_nhan`
+10. `vbhc_learn_template` ★ v0.9
+11. `vbhc_update_template` ★ v0.9
 
 → **Cài thành công.**
 
@@ -739,32 +740,49 @@ systemctl restart vbhc-mcp        # nếu dùng systemd (5A)
 
 Sửa file trong `/root/.vbhc/org/` qua aaPanel File Manager hoặc nano. **PHẢI restart MCP service** sau khi sửa (server cache config khi load).
 
-### 12.3. Đổi password admin
+### 12.3. Quản lý API keys
 
 ```bash
-htpasswd /www/server/nginx/conf/htpasswd-vbhc admin
-# Gõ password mới
+cd /home/mcp-soan-thao-vbhc
+
+# Thêm key mới
+./venv/bin/python scripts/manage_keys.py add <id> --description "..." [--ips ip1,ip2] [--rate-limit N]
+
+# Liệt kê
+./venv/bin/python scripts/manage_keys.py list
+
+# Vô hiệu (giữ trong yaml)
+./venv/bin/python scripts/manage_keys.py revoke <id>
+
+# Đổi key (giữ id, key mới — key cũ KHÔNG còn tác dụng sau restart service)
+./venv/bin/python scripts/manage_keys.py rotate <id>
+
+# Xoá hẳn
+./venv/bin/python scripts/manage_keys.py delete <id>
+
+# Sau bất kỳ thao tác nào → restart service
+systemctl restart vbhc-mcp
 ```
 
-Nginx tự pick up file mới — không cần reload.
+File yaml: `/root/.vbhc/org/api-keys.yaml` (chmod 600). Backup file này khi đổi.
 
 ### 12.4. Backup quan trọng
 
 | Cần backup | Tần suất |
 |---|---|
-| `/root/.vbhc/org/` | Mỗi khi sửa |
+| `/root/.vbhc/org/` (gồm `api-keys.yaml`) | Mỗi khi sửa keys hoặc YAML cơ quan |
 | `/home/mcp-soan-thao-vbhc/` | Mỗi khi update code |
 | `/www/server/panel/vhost/cert/mcp.hagiang.edu.vn/` | Tự động qua aaPanel |
-| `/www/server/nginx/conf/htpasswd-vbhc` | Khi đổi password |
 
 Lệnh backup nhanh:
 ```bash
 tar czf /root/vbhc-backup-$(date +%F).tar.gz \
     /root/.vbhc/org \
-    /www/server/nginx/conf/htpasswd-vbhc \
     /home/mcp-soan-thao-vbhc/scripts \
     /home/mcp-soan-thao-vbhc/resources
 ```
+
+> **Lưu ý**: `api-keys.yaml` chứa plain key — file đã chmod 600 nhưng backup tar nên cũng phải lưu nơi chỉ admin truy cập được.
 
 ### 12.5. Renew SSL
 
@@ -839,22 +857,31 @@ curl -i -u admin:PASSWORD https://mcp.hagiang.edu.vn/mcp
 #    → quay lại Bước 8.2 verify proxy_buffering off
 ```
 
-### Status code 401 dù gõ đúng password
+### Status code 401 dù gõ đúng API key
 
 ```bash
-# File htpasswd có không?
-ls -la /www/server/nginx/conf/htpasswd-vbhc
+# 1. Key có trong YAML không?
+./venv/bin/python scripts/manage_keys.py list --show-keys
+# Cột "revoked" = "YES" → key bị vô hiệu
 
-# Quyền đọc OK?
-chmod 644 /www/server/nginx/conf/htpasswd-vbhc
+# 2. Server đã reload config sau khi thêm/sửa key chưa?
+systemctl restart vbhc-mcp
+journalctl -u vbhc-mcp -n 5 | grep "API keys"
+# Phải thấy: "API keys = .../api-keys.yaml (N key(s))" với N đúng số key
 
-# Path trong nginx config khớp không?
-grep auth_basic_user_file /www/server/panel/vhost/nginx/mcp.hagiang.edu.vn.conf
-
-# Reset password (test)
-htpasswd /www/server/nginx/conf/htpasswd-vbhc admin
-# Gõ password mới, test lại
+# 3. Header trong client config có đúng format không?
+# Phải là: Authorization: Bearer vbhc_<64hex> (có space giữa Bearer và key)
 ```
+
+### Status code 403
+
+Key có `allowed_ips` không match IP nguồn của client.
+- Xem nginx access log: `tail -f /www/wwwlogs/mcp.hagiang.edu.vn.log` — cột $remote_addr là IP server thấy.
+- Update yaml hoặc set `allowed_ips: []` để allow all.
+
+### Status code 429 Too Many Requests
+
+Key vượt rate limit. Tăng `rate_limit_per_minute` trong yaml hoặc rotate với rate cao hơn.
 
 ### Status code 502 Bad Gateway
 

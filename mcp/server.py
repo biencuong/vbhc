@@ -442,11 +442,48 @@ def vbhc_fill_template(
 
     doc.save(str(dst))
 
+    # Auto-validate ND30 sau khi save (NĐ30 quy định BẮT BUỘC mỗi VB ban hành phải
+    # tuân thủ 9 thành phần thể thức). Nếu có ✗ → đưa vào warnings để AI thấy.
+    nd30_check = _validate_nd30(dst)
+    if nd30_check["fail_count"] > 0:
+        warnings.append(
+            f"ND30: {nd30_check['fail_count']} mục FAIL — file CHƯA tuân thủ. "
+            f"Xem nd30_validation."
+        )
+
     return {
         "output_path": str(dst),
         "ops_applied": ops_applied,
         "warnings": warnings,
+        "nd30_validation": nd30_check,
     }
+
+
+def _validate_nd30(docx_path: Path) -> dict:
+    """Helper: chạy validate_thethuc 9 mục, trả counts + summary list. Dùng nội bộ
+    bởi vbhc_fill_template (auto-hook) và vbhc_validate (public tool)."""
+    import validate_thethuc as vt
+    doc = Document(str(docx_path))
+    text = vt.collect_all_text(doc)
+    items = [
+        ("1. Quốc hiệu + Tiêu ngữ",   vt.check_quoc_hieu(text)),
+        ("2. Tên cơ quan ban hành",   vt.check_co_quan(text)),
+        ("3. Số/ký hiệu",             vt.check_so_van_ban(text)),
+        ("4. Tên loại + Trích yếu",   vt.check_ten_loai(text)),
+        ("5. Nội dung",               vt.check_noi_dung(text)),
+        ("6. Người ký",               vt.check_nguoi_ky(text)),
+        ("7. Dấu/chữ ký số",          vt.check_dau()),
+        ("8. Nơi nhận + Lưu",         vt.check_noi_nhan(text)),
+        ("9. Phụ lục",                vt.check_phu_luc(text)),
+    ]
+    summary = [
+        {"label": label, "status": status, "detail": detail}
+        for label, (status, detail) in items
+    ]
+    ok = sum(1 for it in summary if it["status"] == "✓")
+    warn = sum(1 for it in summary if it["status"] == "⚠")
+    fail = sum(1 for it in summary if it["status"] == "✗")
+    return {"summary": summary, "ok_count": ok, "warn_count": warn, "fail_count": fail}
 
 
 @mcp.tool()
@@ -941,6 +978,125 @@ def vbhc_suggest_noi_nhan(
     return result
 
 
+@mcp.tool()
+def vbhc_learn_template(file_path: str) -> dict:
+    """Đọc 1 file Word VBHC mẫu của user, phân tích thể thức theo NĐ30, trả về
+    spec + report (Markdown) để user xem trước khi quyết định lưu làm template.
+
+    AI gọi tool này khi user nói: "học mẫu này", "phân tích mẫu", "kiểm tra thể
+    thức file X", "soi mẫu này", hoặc khi muốn so sánh 1 file với chuẩn ND30.
+
+    Output `report_md` là báo cáo human-readable — AI nên hiển thị nguyên văn cho
+    user thay vì tự diễn giải, để user thấy điểm sai ở đâu, đề xuất sửa ra sao.
+
+    Args:
+        file_path: đường dẫn tuyệt đối tới file .docx (mẫu user)
+
+    Returns:
+        dict gồm: file, loai_vb (slug), spec (chi tiết), issues (cần sửa),
+                  validation (9 mục), report_md
+    """
+    p = Path(file_path).expanduser().resolve()
+    if not p.is_file():
+        return {"error": f"file not found: {p}"}
+    if p.suffix.lower() != ".docx":
+        return {"error": f"file phải có đuôi .docx, không phải {p.suffix}"}
+
+    import learn_template as lt
+    spec, validation, issues = lt.learn(p)
+    return {
+        "file": p.name,
+        "loai_vb": spec["loai_vb"],
+        "spec": spec,
+        "issues": issues,
+        "validation": [
+            {"label": label, "status": status, "detail": detail}
+            for label, (status, detail) in validation
+        ],
+        "report_md": lt.build_report(spec, validation, issues),
+    }
+
+
+@mcp.tool()
+def vbhc_update_template(
+    source_file: str,
+    target_loai_vb: str,
+    confirmed: bool = False,
+) -> dict:
+    """Lưu 1 file Word đã được duyệt làm TEMPLATE chuẩn cho 1 loại VB
+    (resources/templates/<target_loai_vb>.docx).
+
+    AI gọi tool này khi user nói: "cập nhật mẫu", "lưu file này thành template",
+    "thay template loại X bằng file này", thường sau khi đã chạy
+    vbhc_learn_template và user duyệt nội dung.
+
+    Workflow chuẩn (LUÔN qua 2 bước):
+      1. confirmed=False → tool trả preview + cảnh báo (file đích đã có hay chưa,
+         còn lỗi ND30 cần sửa không). AI hiển thị cho user.
+      2. User OK → confirmed=True → tool copy file vào resources/templates/.
+
+    AN TOÀN: nếu source FAIL bất kỳ mục ND30 nào → REFUSE save, trả lại issues.
+
+    Args:
+        source_file: đường dẫn file .docx nguồn (do user cung cấp)
+        target_loai_vb: slug loại VB (vd: "bao-cao", "cong-van", "phieu-ghi-y-kien")
+        confirmed: True khi user xác nhận ghi đè (lần gọi thứ 2)
+
+    Returns:
+        dict gồm: source, target, exists, confirmed, applied, validation_fails,
+                  issues_to_fix_first, preview_message hoặc message
+    """
+    src = Path(source_file).expanduser().resolve()
+    if not src.is_file():
+        return {"error": f"file source not found: {src}"}
+    if src.suffix.lower() != ".docx":
+        return {"error": f"file phải có đuôi .docx, không phải {src.suffix}"}
+
+    slug = re.sub(r"[^a-z0-9\-]", "-", target_loai_vb.lower()).strip("-")
+    if not slug:
+        return {"error": f"target_loai_vb không hợp lệ: '{target_loai_vb}'"}
+
+    target = SKILL_DIR / "resources" / "templates" / f"{slug}.docx"
+
+    # Validate ND30 trước khi cho phép save làm template chuẩn
+    import learn_template as lt
+    spec, validation, issues = lt.learn(src)
+    fail_count = sum(1 for _, (status, _) in validation if status == "✗")
+
+    result: dict[str, Any] = {
+        "source": str(src),
+        "target": str(target),
+        "loai_vb_detected": spec["loai_vb"],
+        "loai_vb_target": slug,
+        "exists": target.is_file(),
+        "confirmed": confirmed,
+        "applied": False,
+        "validation_fails": fail_count,
+        "issues_to_fix_first": [iss for iss in issues if iss["level"] == "fix"],
+    }
+
+    if fail_count > 0:
+        result["error"] = (
+            f"File source FAIL {fail_count} mục thể thức NĐ30. "
+            f"PHẢI fix trước khi lưu làm template. Xem issues_to_fix_first."
+        )
+        return result
+
+    if not confirmed:
+        warn = "⚠ File đích đã tồn tại — sẽ GHI ĐÈ. " if target.is_file() else ""
+        result["preview_message"] = (
+            f"Sẽ copy '{src.name}' → '{target.name}'. {warn}"
+            f"Gọi lại với confirmed=True để thực hiện."
+        )
+        return result
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(src), str(target))
+    result["applied"] = True
+    result["message"] = f"✓ Đã lưu template chuẩn tại {target}"
+    return result
+
+
 # =====================================================================
 # Entry point: stdio (default) or HTTP server
 # =====================================================================
@@ -954,23 +1110,49 @@ def _parse_args():
                         help="HTTP host (default: 127.0.0.1; use 0.0.0.0 for LAN)")
     parser.add_argument("--port", type=int, default=8765,
                         help="HTTP port (default: 8765)")
+    parser.add_argument("--api-keys-file", default=None,
+                        help="API keys YAML (default: $VBHC_API_KEYS_FILE hoặc /root/.vbhc/api-keys.yaml). "
+                             "Chỉ dùng cho --http mode.")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
     if args.http:
-        # FastMCP supports streamable-http transport.
-        # Client config: {"mcpServers": {"vbhc": {"url": "http://host:port/mcp"}}}
-        try:
-            mcp.settings.host = args.host
-            mcp.settings.port = args.port
-        except AttributeError:
-            pass
+        # HTTP mode: wrap MCP ASGI app với APIKeyMiddleware (Bearer token auth) +
+        # chạy bằng uvicorn. Nginx phía trước chỉ làm SSL + reverse proxy, KHÔNG
+        # check Basic Auth nữa (xem MIGRATION-v0.9.md).
+        sys.path.insert(0, str(Path(__file__).parent.resolve()))
+        from auth import APIKeyConfig, APIKeyMiddleware, periodic_flush
+
+        keys_path = Path(
+            args.api_keys_file
+            or os.environ.get("VBHC_API_KEYS_FILE")
+            or str(ORG_DIR / "api-keys.yaml")
+        ).expanduser()
+        api_keys = APIKeyConfig(keys_path)
+
         print(f"[vbhc] HTTP server: http://{args.host}:{args.port}/mcp", file=sys.stderr)
         print(f"[vbhc] SKILL_DIR = {SKILL_DIR}", file=sys.stderr)
         print(f"[vbhc] ORG_DIR   = {ORG_DIR}", file=sys.stderr)
-        mcp.run(transport="streamable-http")
+        print(f"[vbhc] API keys  = {keys_path} ({len(api_keys.keys)} key(s))", file=sys.stderr)
+
+        # FastMCP exposes Starlette ASGI app cho streamable-http transport
+        app = mcp.streamable_http_app()
+        app.add_middleware(APIKeyMiddleware, config=api_keys)
+
+        # Background flush last_used về YAML mỗi 60s (chạy trong event loop của uvicorn)
+        @app.on_event("startup")
+        async def _start_flush_task():
+            asyncio.create_task(periodic_flush(api_keys, 60))
+
+        @app.on_event("shutdown")
+        async def _flush_on_shutdown():
+            api_keys.flush()
+
+        import asyncio
+        import uvicorn
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     else:
-        # Default stdio transport (for local agents like Claude Code)
+        # Default stdio transport (for local agents like Claude Code) — KHÔNG cần auth
         mcp.run()

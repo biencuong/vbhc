@@ -1,0 +1,27 @@
+# API keys file — template
+# Copy file này → /root/.vbhc/api-keys.yaml và `chmod 600`.
+# Quản lý qua CLI: `python scripts/manage_keys.py add|list|revoke|rotate|delete`.
+#
+# Mỗi key cấp cho 1 máy/người dùng riêng. Format key: vbhc_<32-byte-hex>.
+# Reload server (systemctl restart vbhc-mcp) sau khi sửa file để apply.
+
+keys:
+  # Key admin mặc định — tạo bởi installer hoặc CLI
+  - id: "admin"
+    key: "vbhc_REPLACE_WITH_ACTUAL_RANDOM_64HEX"
+    description: "Admin laptop"
+    allowed_ips: []                # [] = allow all; ["10.0.0.5"] = chỉ IP này được dùng
+    rate_limit_per_minute: 120     # giới hạn req/phút per-key (token bucket)
+    created: "2026-05-11"
+    last_used: null                # auto cập nhật khi dùng (ISO datetime)
+    revoked: false
+
+  # Ví dụ key cấp cho 1 máy trong cơ quan, có whitelist IP + rate limit thấp hơn
+  # - id: "may-van-thu-1"
+  #   key: "vbhc_..."
+  #   description: "Máy văn thư - phòng VT"
+  #   allowed_ips: ["192.168.1.50"]
+  #   rate_limit_per_minute: 60
+  #   created: "2026-05-11"
+  #   last_used: null
+  #   revoked: false
