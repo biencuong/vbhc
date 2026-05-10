@@ -462,14 +462,33 @@ curl -I http://mcp.hagiang.edu.vn
 
 ### 8.2. Sửa nginx config (BẮT BUỘC)
 
-aaPanel mặc định bật `proxy_buffering` → MCP streamable-http (SSE) sẽ chunk lỗi, client treo.
+aaPanel mặc định bật `proxy_buffering` + Host header sai → 2 vấn đề:
+1. MCP streamable-http (SSE) sẽ chunk lỗi, client treo
+2. FastMCP TrustedHostMiddleware reject với "Invalid Host header"
 
-1. Vẫn trong popup Settings của site, tab **Configuration file** (thanh trái popup)
-2. Trong file đang xem, tìm dòng `proxy_pass http://127.0.0.1:8765` (do bước 8.1 vừa thêm). Thường nằm trong block `location` ngay đầu file
-3. **Thay TOÀN BỘ block `location`** chứa nó bằng đoạn dưới:
+**Block aaPanel auto-tạo trông như sau** (đừng giữ nguyên):
 
 ```nginx
-location ^~ /mcp {
+#PROXY-START/
+location ^~ /
+{
+    proxy_pass http://127.0.0.1:8765;
+    proxy_set_header Host $host;          ← gây "Invalid Host header"
+    proxy_set_header X-Real-IP $remote_addr;
+    ...
+    # KHÔNG có proxy_buffering off → SSE treo
+}
+#PROXY-END/
+```
+
+1. Vẫn trong popup Settings của site, tab **Configuration file** (thanh trái popup)
+2. Tìm block `#PROXY-START/ ... #PROXY-END/`
+3. **Thay TOÀN BỘ block** (giữ 2 dòng marker `#PROXY-START/` và `#PROXY-END/` để aaPanel biết) bằng đoạn dưới:
+
+```nginx
+#PROXY-START/
+location ^~ /mcp
+{
     proxy_pass http://127.0.0.1:8765;
     proxy_http_version 1.1;
     # Host = backend address để qua TrustedHostMiddleware của FastMCP/Starlette
@@ -491,9 +510,12 @@ location ^~ /mcp {
     proxy_read_timeout 86400s;
     proxy_send_timeout 86400s;
 }
+#PROXY-END/
 ```
 
 4. Click **Save**. aaPanel tự reload nginx. Nếu báo đỏ syntax → kiểm tra dấu `{`, `}`.
+
+> ⚠ **CẢNH BÁO**: Sau khi sửa xong, **KHÔNG đụng vào tab "Reverse Proxy" trong UI nữa**. Nếu Edit/Save qua tab đó, aaPanel sẽ regen lại block giữa `#PROXY-START/` và `#PROXY-END/`, mất hết config tuỳ chỉnh. Mỗi lần cần sửa nginx, vào thẳng tab **Configuration file**.
 
 > **Giải thích:** `proxy_buffering off` bắt nginx forward response chunk-by-chunk thay vì giữ cho đầy buffer. `chunked_transfer_encoding on` giữ chunked HTTP. `proxy_read_timeout 86400s` chống nginx ngắt session đang dài.
 
