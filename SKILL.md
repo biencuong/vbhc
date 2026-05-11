@@ -195,21 +195,49 @@ Bước tiếp:
 
 ## Tools / Resources có sẵn
 
-### MCP tools (nếu MCP server `vbhc` đã chạy)
-- `vbhc_classify(description)` → đề xuất loại VB
-- `vbhc_create_workfolder(name, parent_dir)` → tạo cấu trúc chuẩn
-- `vbhc_reorganize(folder_path)` → sắp xếp folder bừa thành chuẩn
-- `vbhc_fill_template(template, data, output)` → fill .docx
-- `vbhc_validate(docx_path)` → checklist thể thức
+### MCP tools (14, v1.0)
+
+**Phân loại + sắp xếp:**
+- `vbhc_classify(description)` → đề xuất loại VB + detect ambiguous-form
+- `vbhc_create_workfolder(description, parent_dir, custom_slug?)` → tạo cấu trúc chuẩn
+- `vbhc_reorganize(source_folder)` → sắp xếp folder bừa thành chuẩn
+- `vbhc_regenerate_check(work_folder, update?)` → detect file mới trong `1-tham-chieu/`
+
+**Fill + validate:**
+- `vbhc_fill_template(template, output, cell_ops?, paragraph_ops?, replace_ops?)` → fill .docx; `template` chấp nhận slug (vd `"bao-cao"`) hoặc full path
+- `vbhc_validate(docx_path)` → checklist 9 thành phần thể thức
 - `vbhc_aggregate_survey(xlsx_path)` → tổng hợp Excel khảo sát Google Forms (stats + comments)
 
+**Cấu hình cơ quan:**
+- `vbhc_load_org_config(filename)` → đọc YAML từ ORG dir (`~/.vbhc/org/`)
+- `vbhc_suggest_noi_nhan(vb_purpose, vb_type, user_provided?)` → gợi ý nơi nhận theo phân công NV
+
+**Học + cập nhật template:**
+- `vbhc_learn_template(file_path)` → phân tích thể thức 1 file mẫu user, trả spec + report
+- `vbhc_update_template(source_file, target_loai_vb, confirmed?)` → ghi template vào local cache (~/.vbhc/cache/templates/)
+
+**Cloud sync (v1.0+):**
+- `vbhc_sync_knowledge(force?, only?)` → pull templates+rules+code từ cloud KB Hub
+- `vbhc_knowledge_status()` → tóm tắt cache + drift vs cloud
+- `vbhc_publish_template(slug, confirmed?)` → admin push template lên cloud (cần scope admin)
+
+### Knowledge layout (v1.0+)
+
+Templates + rules + code đều ở `~/.vbhc/cache/` (sync từ cloud). Khi gọi `vbhc_fill_template("bao-cao", ...)`, server resolve qua cache → bundled `resources/templates/` → cloud-pull on-demand. Sửa rule mới? Admin sửa YAML rồi `vbhc_publish_template`, user khác chạy `vbhc_sync_knowledge`.
+
+Rules YAML data-driven ở `tri-thuc-template/rules/`:
+- `the-thuc.yaml` — regex + keywords cho 9 mục ND30
+- `typo-fixes.yaml` — chính tả + encoding fixes (Ð → Đ)
+- `loai-vb.yaml` — classify rules + ambiguous forms
+
 ### Python scripts (fallback nếu không có MCP)
-- `scripts/vbhc_doc_builder.py` — **MODULE chính** để generate VB từ đầu với header chuẩn ND 30 (import + dùng helpers, đừng tự build header bằng python-docx thủ công)
+- `scripts/vbhc_doc_builder.py` — **MODULE chính** để generate VB từ đầu với header chuẩn ND 30
 - `scripts/reorganize_folder.py <folder>`
 - `scripts/fill_template.py <template> <data.yaml> <output>`
 - `scripts/inspect_docx.py <file>` — debug structure
 - `scripts/validate_thethuc.py <docx>`
 - `scripts/aggregate_survey.py <file.xlsx>` — tổng hợp khảo sát Google Forms
+- `scripts/manage_keys.py` — admin CLI quản lý API keys + scope
 
 ### Resources
 - `resources/workflow-7-buoc.md` — chi tiết từng bước

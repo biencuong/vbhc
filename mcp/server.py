@@ -1,25 +1,24 @@
-"""MCP server for soan-thao-vbhc skill.
+"""MCP server for soan-thao-vbhc skill (v1.0 — local thin-MCP).
 
-Exposes tools for Vietnamese administrative document workflows.
+Exposes 14 tools cho workflow soạn VBHC theo Nghị định 30/2020.
 
-Run via stdio (default):
+Chạy local stdio (mỗi máy user):
     python server.py
 
-Run as HTTP server (for team / multi-user deploy):
-    python server.py --http --host 0.0.0.0 --port 8765
-    # then clients connect via streamable-http transport at http://<host>:8765/mcp
-
-Storage tiers (3 levels):
+Storage tiers:
   - SKILL    = D:/SKILL_AI/skills/soan-thao-vbhc/   (read-only code + danh-muc-loai-vb)
+  - CACHE    = ~/.vbhc/cache/  (templates + rules + code — sync từ cloud KB Hub)
   - ORG      = $VBHC_ORG_DIR (default: ~/.vbhc/org/)
                YAML chung cơ quan: thông tin co quan, người ký, phân công nhiệm vụ
   - USER     = arg in tool calls (work folder per task)
 
+Knowledge sync: chạy `python mcp/bootstrap.py` lần đầu (hoặc dùng PowerShell
+installer — xem INSTALL-LOCAL.md). Sau đó `vbhc_sync_knowledge` để pull update.
+
 Client config (stdio):
     {"mcpServers": {"vbhc": {"command": "python", "args": [".../server.py"]}}}
 
-Client config (HTTP):
-    {"mcpServers": {"vbhc": {"url": "http://your-server:8765/mcp"}}}
+HTTP mode (v0.9) đã bị gỡ — xem MIGRATION-v1.0.md để chuyển sang local.
 """
 from __future__ import annotations
 
@@ -1317,74 +1316,11 @@ def vbhc_knowledge_status() -> dict:
 
 
 # =====================================================================
-# Entry point: stdio (default) or HTTP server
+# Entry point: stdio transport (local thin-MCP)
 # =====================================================================
-
-def _parse_args():
-    import argparse
-    parser = argparse.ArgumentParser(description="VBHC MCP server")
-    parser.add_argument("--http", action="store_true",
-                        help="Run as HTTP server (streamable-http transport)")
-    parser.add_argument("--host", default="127.0.0.1",
-                        help="HTTP host (default: 127.0.0.1; use 0.0.0.0 for LAN)")
-    parser.add_argument("--port", type=int, default=8765,
-                        help="HTTP port (default: 8765)")
-    parser.add_argument("--api-keys-file", default=None,
-                        help="API keys YAML (default: $VBHC_API_KEYS_FILE hoặc /root/.vbhc/api-keys.yaml). "
-                             "Chỉ dùng cho --http mode.")
-    return parser.parse_args()
-
+# HTTP mode đã bị gỡ ở v1.0. v0.9 cũ có `--http` chạy như cloud MCP với
+# auth Bearer per-client; v1.0 đổi sang kiến trúc local thin-MCP + cloud
+# Knowledge Hub (cloud/kb_server.py). Migration: xem MIGRATION-v1.0.md.
 
 if __name__ == "__main__":
-    args = _parse_args()
-    if args.http:
-        # HTTP mode: wrap MCP ASGI app với APIKeyMiddleware (Bearer token auth) +
-        # chạy bằng uvicorn. Nginx phía trước chỉ làm SSL + reverse proxy, KHÔNG
-        # check Basic Auth nữa (xem MIGRATION-v0.9.md).
-        sys.path.insert(0, str(Path(__file__).parent.resolve()))
-        from auth import APIKeyConfig, APIKeyMiddleware, periodic_flush
-
-        keys_path = Path(
-            args.api_keys_file
-            or os.environ.get("VBHC_API_KEYS_FILE")
-            or str(ORG_DIR / "api-keys.yaml")
-        ).expanduser()
-        api_keys = APIKeyConfig(keys_path)
-
-        print(f"[vbhc] HTTP server: http://{args.host}:{args.port}/mcp", file=sys.stderr)
-        print(f"[vbhc] SKILL_DIR = {SKILL_DIR}", file=sys.stderr)
-        print(f"[vbhc] ORG_DIR   = {ORG_DIR}", file=sys.stderr)
-        print(f"[vbhc] API keys  = {keys_path} ({len(api_keys.keys)} key(s))", file=sys.stderr)
-
-        import asyncio
-        import uvicorn
-        from contextlib import asynccontextmanager
-
-        # FastMCP exposes Starlette ASGI app cho streamable-http transport.
-        # Starlette 1.0 đã remove app.on_event — phải dùng lifespan context manager.
-        # Pattern: wrap lifespan gốc của FastMCP để gắn thêm periodic_flush task +
-        # flush on shutdown, KHÔNG break startup của StreamableHTTP session manager.
-        app = mcp.streamable_http_app()
-        original_lifespan = app.router.lifespan_context
-
-        @asynccontextmanager
-        async def lifespan(_app):
-            flush_task = asyncio.create_task(periodic_flush(api_keys, 60))
-            try:
-                async with original_lifespan(_app):
-                    yield
-            finally:
-                flush_task.cancel()
-                try:
-                    await flush_task
-                except asyncio.CancelledError:
-                    pass
-                api_keys.flush()
-
-        app.router.lifespan_context = lifespan
-        app.add_middleware(APIKeyMiddleware, config=api_keys)
-
-        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
-    else:
-        # Default stdio transport (for local agents like Claude Code) — KHÔNG cần auth
-        mcp.run()
+    mcp.run()

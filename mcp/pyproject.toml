@@ -1,14 +1,15 @@
 [project]
 name = "vbhc-mcp"
 version = "1.0.0"
-description = "MCP server cho soạn thảo VBHC theo Nghị định 30/2020/NĐ-CP"
+description = "Local thin-MCP + Cloud Knowledge Hub cho soạn VBHC theo NĐ 30/2020"
 authors = [{ name = "soan-thao-vbhc skill" }]
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=1.0.0",
     "python-docx>=1.1.0",
     "openpyxl>=3.1.0",
+    "pyyaml>=6.0",
+    # Cloud KB Hub server (chỉ dùng trên VPS — local stdio không cần)
+    "uvicorn>=0.27.0",
+    "starlette>=0.36.0",
 ]
-
-[project.scripts]
-vbhc-mcp = "server:main"
