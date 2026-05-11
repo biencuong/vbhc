@@ -2,13 +2,20 @@
 
 Usage:
     manage_keys.py add <id> [--description TEXT] [--ips ip1,ip2] [--rate-limit N]
+                            [--scope read,admin]
     manage_keys.py list [--show-keys]
     manage_keys.py revoke <id>
     manage_keys.py rotate <id>           # giữ id, sinh key mới
     manage_keys.py delete <id>           # xoá hẳn
+    manage_keys.py grant <id> <scope>    # thêm scope (vd: admin)
+    manage_keys.py ungrant <id> <scope>  # bỏ scope
 
 Mặc định đọc/ghi `$VBHC_API_KEYS_FILE` (fallback `/root/.vbhc/api-keys.yaml`).
 Override bằng `--file PATH`.
+
+Scopes:
+  - `read`  (mặc định): tải manifest + templates + rules + code (GET /kb/*)
+  - `admin`: thêm quyền publish (POST /kb/templates/*) — chỉ cấp cho admin
 
 `add` in ra key 1 lần — admin LƯU LẠI ngay để cấp cho client. Sau đó key vẫn nằm
 trong YAML (file đã chmod 600 — chỉ admin đọc được).
@@ -66,11 +73,32 @@ def find(records: list[dict], kid: str) -> dict | None:
     return None
 
 
+VALID_SCOPES = ("read", "admin")
+
+
+def _parse_scopes(raw: str) -> list[str]:
+    items = [s.strip() for s in (raw or "").split(",") if s.strip()]
+    if not items:
+        return ["read"]
+    for s in items:
+        if s not in VALID_SCOPES:
+            raise ValueError(f"Scope không hợp lệ: '{s}'. Chỉ chấp nhận: {VALID_SCOPES}")
+    # `admin` ngầm bao gồm `read` — chuẩn hóa
+    if "admin" in items and "read" not in items:
+        items.append("read")
+    return sorted(set(items))
+
+
 def cmd_add(args):
     data = load(args.file)
     if find(data["keys"], args.id):
         print(f"[ERR] id '{args.id}' đã tồn tại — dùng `rotate` để đổi key, hoặc chọn id khác",
               file=sys.stderr)
+        return 1
+    try:
+        scopes = _parse_scopes(args.scope)
+    except ValueError as e:
+        print(f"[ERR] {e}", file=sys.stderr)
         return 1
     key = gen_key()
     rec = {
@@ -79,6 +107,7 @@ def cmd_add(args):
         "description": args.description or "",
         "allowed_ips": [s.strip() for s in (args.ips or "").split(",") if s.strip()],
         "rate_limit_per_minute": int(args.rate_limit),
+        "scope": scopes,
         "created": date.today().isoformat(),
         "last_used": None,
         "revoked": False,
@@ -91,10 +120,56 @@ def cmd_add(args):
     print(f"  Description: {rec['description']}")
     print(f"  Allowed IPs: {rec['allowed_ips'] or '(any)'}")
     print(f"  Rate limit:  {rec['rate_limit_per_minute']} req/min")
+    print(f"  Scope:       {','.join(rec['scope'])}")
     print()
     print("⚠ LƯU LẠI KEY TRÊN — đặt vào config client với header:")
     print(f"     Authorization: Bearer {key}")
     print("⚠ Key vẫn còn trong file (chmod 600 cho admin). Nếu mất, dùng `rotate {id}` để tạo key mới.")
+    return 0
+
+
+def cmd_grant(args):
+    data = load(args.file)
+    rec = find(data["keys"], args.id)
+    if rec is None:
+        print(f"[ERR] không tìm thấy id '{args.id}'", file=sys.stderr)
+        return 1
+    if args.scope not in VALID_SCOPES:
+        print(f"[ERR] Scope không hợp lệ: '{args.scope}'. Chỉ chấp nhận: {VALID_SCOPES}",
+              file=sys.stderr)
+        return 1
+    current = list(rec.get("scope") or ["read"])
+    if args.scope in current:
+        print(f"[INFO] '{args.id}' đã có scope '{args.scope}'")
+        return 0
+    current.append(args.scope)
+    # admin ngầm bao read
+    if "admin" in current and "read" not in current:
+        current.append("read")
+    rec["scope"] = sorted(set(current))
+    save(args.file, data)
+    print(f"[OK] Granted '{args.scope}' to '{args.id}' — scope: {rec['scope']}")
+    print("     (server cache config khi start; restart MCP service để có hiệu lực)")
+    return 0
+
+
+def cmd_ungrant(args):
+    data = load(args.file)
+    rec = find(data["keys"], args.id)
+    if rec is None:
+        print(f"[ERR] không tìm thấy id '{args.id}'", file=sys.stderr)
+        return 1
+    current = list(rec.get("scope") or ["read"])
+    if args.scope not in current:
+        print(f"[INFO] '{args.id}' không có scope '{args.scope}'")
+        return 0
+    current = [s for s in current if s != args.scope]
+    if not current:
+        current = ["read"]   # không bao giờ để rỗng — fallback read
+    rec["scope"] = sorted(set(current))
+    save(args.file, data)
+    print(f"[OK] Ungranted '{args.scope}' from '{args.id}' — scope còn: {rec['scope']}")
+    print("     (restart MCP service để có hiệu lực)")
     return 0
 
 
@@ -116,10 +191,11 @@ def cmd_list(args):
             "description": r.get("description", "")[:40],
             "ips": ",".join(r.get("allowed_ips") or []) or "(any)",
             "rate": str(r.get("rate_limit_per_minute", 120)),
+            "scope": ",".join(r.get("scope") or ["read"]),
             "last_used": r.get("last_used") or "-",
             "revoked": "YES" if r.get("revoked") else "no",
         })
-    cols = ["id", "key", "description", "ips", "rate", "last_used", "revoked"]
+    cols = ["id", "key", "description", "ips", "rate", "scope", "last_used", "revoked"]
     widths = {c: max(len(c), max(len(r[c]) for r in rows)) for c in cols}
     sep = "  ".join("-" * widths[c] for c in cols)
     print("  ".join(c.ljust(widths[c]) for c in cols))
@@ -187,7 +263,19 @@ def main():
     p.add_argument("--description", default="")
     p.add_argument("--ips", default="", help="Comma-separated allowed IPs (rỗng = allow all)")
     p.add_argument("--rate-limit", type=int, default=120, help="Req/min (default 120)")
+    p.add_argument("--scope", default="read",
+                   help="Comma-separated scopes: read,admin (default: read)")
     p.set_defaults(func=cmd_add)
+
+    p = sub.add_parser("grant", help="Thêm scope cho key")
+    p.add_argument("id")
+    p.add_argument("scope", choices=VALID_SCOPES)
+    p.set_defaults(func=cmd_grant)
+
+    p = sub.add_parser("ungrant", help="Bỏ scope khỏi key (tối thiểu vẫn còn 'read')")
+    p.add_argument("id")
+    p.add_argument("scope", choices=VALID_SCOPES)
+    p.set_defaults(func=cmd_ungrant)
 
     p = sub.add_parser("list", help="Liệt kê tất cả keys")
     p.add_argument("--show-keys", action="store_true", help="Hiện full key (mặc định mask)")

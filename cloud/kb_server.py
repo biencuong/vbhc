@@ -30,18 +30,20 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json as _json
 import logging
 import os
 import re
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Import auth module từ mcp/ (cùng repo)
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "mcp"))
 
-from auth import APIKeyConfig, APIKeyMiddleware, periodic_flush  # noqa: E402
+from auth import APIKeyConfig, APIKeyMiddleware, has_scope, periodic_flush  # noqa: E402
 
 from starlette.applications import Starlette  # noqa: E402
 from starlette.middleware import Middleware  # noqa: E402
@@ -246,14 +248,138 @@ async def org_config(request: Request) -> Response:
 
 
 # =====================================================================
-# Admin upload (Phase 4 — placeholder cho giờ trả 501)
+# Admin upload (Phase 4)
 # =====================================================================
 
+MAX_TEMPLATE_BYTES = 10 * 1024 * 1024   # 10 MB hard cap
+DOCX_MAGIC = b"PK\x03\x04"               # zip header — .docx là zip
+
+
+def _audit(action: str, kid: str, ip: str, slug: str, status: int, extra: dict | None = None):
+    """Append-only audit log tại KB_DIR/audit.log. Một dòng JSON per event."""
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "action": action,
+        "kid": kid,
+        "ip": ip,
+        "slug": slug,
+        "status": status,
+    }
+    if extra:
+        entry.update(extra)
+    try:
+        path = KB.kb_dir / "audit.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as e:
+        log.warning("audit write failed: %s", e)
+
+
 async def template_upload(request: Request) -> Response:
-    return JSONResponse(
-        {"error": "Admin upload chưa kích hoạt — sẽ làm ở Phase 4 (vbhc_publish_template)"},
-        status_code=501,
-    )
+    """POST /kb/templates/<slug>.docx — admin upload template.
+
+    Yêu cầu:
+      - Bearer key có scope `admin`
+      - Body = bytes file .docx (zip magic 'PK\\x03\\x04')
+      - Slug khớp SAFE_SLUG, size <= MAX_TEMPLATE_BYTES
+
+    Behavior:
+      1. Archive existing (nếu có) → templates-archive/<slug>-<ts>.docx
+      2. Save body atomic → templates/<slug>.docx
+      3. Rebuild manifest.json (gọi build_manifest)
+      4. Append audit.log
+      5. Trả JSON {ok, slug, sha256, size, archived, manifest_generated}
+    """
+    rec = getattr(request.state, "api_key_rec", None) or {}
+    kid = rec.get("id", "?")
+    ip = (request.headers.get("X-Real-IP")
+          or (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+          or (request.client.host if request.client else ""))
+
+    slug = request.path_params.get("slug", "")
+    if not SAFE_SLUG.match(slug):
+        _audit("publish_deny", kid, ip, slug, 400, {"reason": "invalid_slug"})
+        return _bad_request(f"Invalid template slug: {slug!r}")
+
+    if not has_scope(rec, "admin"):
+        _audit("publish_deny", kid, ip, slug, 403, {"reason": "missing_scope_admin"})
+        return JSONResponse(
+            {"error": f"Key '{kid}' không có scope 'admin' — không được publish template."},
+            status_code=403,
+        )
+
+    body = await request.body()
+    if not body:
+        _audit("publish_deny", kid, ip, slug, 400, {"reason": "empty_body"})
+        return _bad_request("Empty body — gửi nội dung .docx trong body request")
+    if len(body) > MAX_TEMPLATE_BYTES:
+        _audit("publish_deny", kid, ip, slug, 413, {"reason": "too_large", "size": len(body)})
+        return JSONResponse(
+            {"error": f"Template quá lớn: {len(body)} bytes > {MAX_TEMPLATE_BYTES}"},
+            status_code=413,
+        )
+    if not body.startswith(DOCX_MAGIC):
+        _audit("publish_deny", kid, ip, slug, 400, {"reason": "not_docx", "size": len(body)})
+        return _bad_request("Body không phải file .docx (thiếu zip magic PK\\x03\\x04)")
+
+    # Save atomic + archive cũ
+    try:
+        target = KB.asset_path("templates", f"{slug}.docx")
+    except PermissionError as e:
+        return _bad_request(str(e))
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    archived_to: str | None = None
+    if target.is_file():
+        archive_dir = KB.kb_dir / "templates-archive"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        archive_path = archive_dir / f"{slug}-{ts}.docx"
+        target.replace(archive_path)
+        archived_to = str(archive_path)
+
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_bytes(body)
+    tmp.replace(target)
+
+    # Rebuild manifest (lazy import — build_manifest ở thư mục cùng cấp)
+    sha256_new = ""
+    manifest_generated = ""
+    try:
+        import importlib.util
+        bm_path = Path(__file__).resolve().parent / "build_manifest.py"
+        spec = importlib.util.spec_from_file_location("build_manifest", bm_path)
+        bm = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bm)  # type: ignore
+        manifest = bm.build_manifest(KB.kb_dir)
+        manifest_path = KB.kb_dir / "manifest.json"
+        manifest_path.write_text(
+            _json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        sha256_new = (manifest.get("templates") or {}).get(slug, {}).get("sha256", "")
+        manifest_generated = manifest.get("generated", "")
+    except Exception as e:
+        log.exception("Rebuild manifest failed sau upload %s.docx", slug)
+        _audit("publish_partial", kid, ip, slug, 500,
+               {"reason": "rebuild_manifest_failed", "error": str(e)})
+        return JSONResponse(
+            {"error": f"Upload OK nhưng rebuild manifest fail: {e}"},
+            status_code=500,
+        )
+
+    _audit("publish_ok", kid, ip, slug, 200,
+           {"size": len(body), "sha256": sha256_new, "archived_to": archived_to})
+
+    return JSONResponse({
+        "ok": True,
+        "slug": slug,
+        "sha256": sha256_new,
+        "size": len(body),
+        "archived_to": archived_to,
+        "manifest_generated": manifest_generated,
+    })
 
 
 # =====================================================================

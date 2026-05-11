@@ -1221,6 +1221,90 @@ def vbhc_sync_knowledge(force: bool = False, only: str | None = None) -> dict:
 
 
 @mcp.tool()
+def vbhc_publish_template(slug: str, confirmed: bool = False) -> dict:
+    """Đẩy 1 template từ local cache (`~/.vbhc/cache/templates/<slug>.docx`)
+    lên cloud KB Hub để chia sẻ cho mọi máy khác trong cơ quan.
+
+    Yêu cầu: API key trong ~/.vbhc/config.yaml phải có scope `admin`.
+
+    Workflow chuẩn (LUÔN qua 2 bước):
+      1. confirmed=False → tool kiểm tra cache có file không, in preview
+         (slug, size, sha256 local) + cảnh báo nếu cache là bundled file
+         (chưa qua vbhc_update_template). AI hiển thị cho user.
+      2. User OK → confirmed=True → tool POST lên cloud. Server sẽ archive
+         version cũ, save new, rebuild manifest, append audit log.
+
+    Sau khi publish OK, các máy khác chạy vbhc_sync_knowledge sẽ nhận version mới.
+
+    Args:
+        slug: slug loại VB (vd "bao-cao", "cong-van"). Phải có file
+              ~/.vbhc/cache/templates/<slug>.docx (do vbhc_update_template ghi).
+        confirmed: True khi user xác nhận publish (lần gọi thứ 2).
+
+    Returns:
+        dict gồm: slug, source, size_local, sha256_local, confirmed, applied,
+                  preview_message hoặc result (response từ server: sha256,
+                  archived_to, manifest_generated).
+    """
+    if not kc.is_configured():
+        return {"error": "Chưa bootstrap — chạy `python mcp/bootstrap.py` trước."}
+
+    safe_slug = re.sub(r"[^a-z0-9\-_]", "", slug.lower())
+    if not safe_slug:
+        return {"error": f"slug không hợp lệ: '{slug}'"}
+
+    cache_p = kc.cache_path_for("templates", f"{safe_slug}.docx")
+    if not cache_p.is_file():
+        return {
+            "error": (
+                f"Không có {cache_p}. Chạy vbhc_update_template để ghi template "
+                f"vào cache trước, rồi publish."
+            )
+        }
+
+    body = cache_p.read_bytes()
+    sha256_local = __import__("hashlib").sha256(body).hexdigest()
+
+    result: dict[str, Any] = {
+        "slug": safe_slug,
+        "source": str(cache_p),
+        "size_local": len(body),
+        "sha256_local": sha256_local,
+        "confirmed": confirmed,
+        "applied": False,
+    }
+
+    if not confirmed:
+        result["preview_message"] = (
+            f"Sẽ POST '{cache_p.name}' ({len(body)} bytes, sha256={sha256_local[:12]}...) "
+            f"lên cloud. Server sẽ archive version cũ + rebuild manifest. "
+            f"Gọi lại với confirmed=True để thực hiện."
+        )
+        return result
+
+    try:
+        resp = kc.publish_template(safe_slug, source_path=cache_p)
+    except kc.KBError as e:
+        result["error"] = str(e)
+        return result
+
+    result["applied"] = True
+    result["result"] = resp
+    # Sau publish, refresh local manifest để vbhc_knowledge_status thấy đúng
+    try:
+        kc.sync_manifest()
+    except kc.KBError:
+        pass
+    result["message"] = (
+        f"✓ Đã publish '{safe_slug}.docx' lên cloud "
+        f"(sha256={resp.get('sha256','?')[:12]}..., "
+        f"archived={'yes' if resp.get('archived_to') else 'no'}). "
+        f"Máy khác chạy vbhc_sync_knowledge sẽ nhận version mới."
+    )
+    return result
+
+
+@mcp.tool()
 def vbhc_knowledge_status() -> dict:
     """Trả thông tin cache: bản local vs cloud, drift, last sync.
 

@@ -55,7 +55,7 @@ Xem `PLAN-v1.0.md` (cùng folder) để biết chi tiết.
 | 1.5 | Extract rules → YAML (data-driven) | ✅ **DONE** | 1 ngày |
 | 2 | Local sync + auto-bootstrap | ✅ **DONE** (commit 2f8b56a, 2026-05-11) | — |
 | 3 | PowerShell installer (.ps1) | ✅ **DONE** (2026-05-11) | — |
-| 4 | Admin publish workflow | ⏳ pending | 0.5 ngày |
+| 4 | Admin publish workflow | ✅ **DONE** (2026-05-12) | — |
 | 5 | Migration v0.9 → v1.0 + cleanup | ⏳ pending | 1 ngày |
 
 ---
@@ -282,37 +282,49 @@ Uninstall: `powershell -File cloud\uninstall.ps1 -NonInteractive -InstallDir ...
 
 ---
 
-## 7. Phase 4 — Admin publish workflow ⏳
+## 7. Phase 4 — Admin publish workflow ✅ (2026-05-12)
 
-### Mục tiêu
+### Đã làm
 
-Admin "học mẫu" trên máy local → push template lên cloud → mọi user khác nhận khi sync tiếp.
+| File | Vai trò |
+|---|---|
+| `scripts/manage_keys.py` *(sửa)* | Thêm field `scope: [read, admin]`. `add --scope read,admin`. Sub-command mới `grant <id> <scope>` + `ungrant <id> <scope>`. `list` hiển thị cột scope. `admin` ngầm bao `read` — không bao giờ để rỗng (fallback read). |
+| `mcp/auth.py` *(sửa)* | Middleware sau khi auth thành công gán `request.state.api_key_rec = rec` (handler có thể inspect). Hàm helper `has_scope(rec, scope)` — backward compat (record cũ thiếu scope → coi như `["read"]`). |
+| `cloud/kb_server.py` *(sửa)* | Implement POST `/kb/templates/<slug>.docx`. Check `has_scope(rec, "admin")` → 403 nếu thiếu. Validate body: zip magic `PK\x03\x04` (else 400), size ≤ 10MB (else 413). Archive existing → `KB_DIR/templates-archive/<slug>-<UTC-ts>.docx`. Save atomic + rebuild manifest qua `importlib.util.spec_from_file_location("build_manifest", bm_path)`. Append `audit.log` (JSON Lines) cho mọi event publish_ok / publish_deny / publish_partial. |
+| `mcp/knowledge_client.py` *(sửa)* | Hàm mới `_http_post(url, key, body, content_type, timeout)` + `publish_template(slug, source_path=None)`. POST raw bytes với Bearer + Content-Type docx. |
+| `mcp/server.py` *(sửa)* | Tool mới `vbhc_publish_template(slug, confirmed=False)`. 2-step workflow như `vbhc_update_template`: preview → confirmed=True publish. Sanitize slug. Trả error rõ nếu cache thiếu / KBError từ server. Sau publish tự `sync_manifest`. |
 
-### Specs
+### Audit log format
 
-1. **Mở rộng `manage_keys.py` thêm scope:**
-   ```yaml
-   - id: "admin-bien-cuong"
-     key: "vbhc_..."
-     scope: ["read", "admin"]   # mới — default ["read"]
-   ```
+JSON Lines tại `KB_DIR/audit.log` — mỗi dòng 1 event:
 
-2. **Sửa `cloud/kb_server.py`:**
-   - POST `/kb/templates/<slug>.docx` — yêu cầu scope `admin`, accept multipart upload, ghi vào `KB_DIR/templates/<slug>.docx`, rebuild manifest, bump version.
-   - Có version retention (`templates-archive/<slug>-<ver>.docx`) để rollback.
-   - Audit log: ai upload gì khi nào.
+```json
+{"ts":"2026-05-11T17:47:49+00:00","action":"publish_ok","kid":"admin1","ip":"127.0.0.1","slug":"bao-cao","status":200,"size":38059,"sha256":"4bc530ee...","archived_to":null}
+{"ts":"...","action":"publish_deny","kid":"user1","ip":"...","slug":"...","status":403,"reason":"missing_scope_admin"}
+```
 
-3. **Tool MCP mới `vbhc_publish_template(slug)`:**
-   - Đọc `~/.vbhc/cache/templates/<slug>.docx` (đã được `vbhc_update_template` ghi)
-   - POST lên cloud
-   - Tự sync manifest sau push để các máy khác thấy version mới
+### Test (đã pass — 2026-05-11)
 
-4. **Tool `vbhc_publish_rule(name)`** (optional Phase 4.5) — admin push rule YAML mới.
+Test E2E gồm 8 scenarios:
+- (A) user1 (read only) POST → **403** + body mention scope
+- (B) admin1 POST với invalid slug (uppercase / hyphen sai) → **400**
+- (C) admin1 POST không có zip magic → **400**
+- (D) admin1 POST slug mới hợp lệ → **200**, file saved, archived=None, manifest bump
+- (E) admin1 POST lại same slug → **200**, archive file tồn tại với pattern `<slug>-<UTC-ts>.docx`, sha256 v2 ≠ v1
+- (F) user1 GET manifest sau publish → thấy sha256 v2 (manifest đã rebuild + serve fresh)
+- (G) audit.log đầy đủ entries: 3 deny + 2 ok với đúng kid + status
+- (H) MCP tool `vbhc_publish_template`: confirmed=False → preview; confirmed=True → applied=True + auto sync manifest
 
-### Test
+Test script: `C:\Users\AD\AppData\Local\Temp\test_publish_e2e.py` (đã xoá).
 
-- Admin local: `vbhc_learn_template(mau.docx)` → `vbhc_update_template("cong-van", confirmed=True)` (ghi cache) → `vbhc_publish_template("cong-van")` → manifest cloud bump
+Workflow demo end-to-end:
+- Admin local: `vbhc_learn_template(mau.docx)` → review → `vbhc_update_template("cong-van", confirmed=True)` (ghi cache) → `vbhc_publish_template("cong-van", confirmed=True)` → manifest cloud bump + archive cũ
 - User B máy khác: `vbhc_sync_knowledge` → thấy version mới → `vbhc_fill_template("cong-van", ...)` dùng template mới
+
+### Chưa làm (defer Phase 4.5)
+
+- `vbhc_publish_rule(name)` — admin push rule YAML mới
+- Rollback CLI tool — admin restore từ `templates-archive/`
 
 ---
 
@@ -461,15 +473,9 @@ rm -rf "$VBHC_HOME"
 
 ## 13. Tasks cho phiên tiếp theo
 
-**Phase 2 + Phase 3 đã đóng** (commits 2f8b56a + 595dace + 2026-05-11). Sang Phase 4.
+**Phase 2 + 3 + 4 đã đóng** (2026-05-11/12). Sang Phase 5 — release v1.0.0.
 
-**Ưu tiên 1 — Phase 4 (0.5 ngày):**
-- Viết `cloud/install.ps1` theo specs ở section 6
-- Thêm `scope` vào api-keys schema + manage_keys.py
-- POST handler trong kb_server.py
-- Tool `vbhc_publish_template` trong server.py
-
-**Ưu tiên 2 — Phase 5 (1 ngày):**
+**Ưu tiên 1 — Phase 5 (1 ngày):**
 - `MIGRATION-v1.0.md`
 - Gỡ HTTP mode trong server.py
 - Cập nhật README, SKILL.md, HANDOFF.md (root)

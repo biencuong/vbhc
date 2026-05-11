@@ -210,6 +210,9 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 
         self.config.mark_used(rec)
 
+        # Expose record cho route handler (vd kb_server check scope cho POST)
+        request.state.api_key_rec = rec
+
         try:
             resp = await call_next(request)
         except Exception:
@@ -219,6 +222,12 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         log.info("auth_ok kid=%s ip=%s method=%s path=%s status=%d",
                  kid, ip, request.method, path, resp.status_code)
         return resp
+
+
+def has_scope(rec: dict, scope: str) -> bool:
+    """Backward compat: record không có 'scope' → coi như ['read']."""
+    scopes = rec.get("scope") or ["read"]
+    return scope in scopes
 
     def _reject(self, status: int, reason: str, ip: str, path: str, kid: str) -> Response:
         log.warning("auth_deny kid=%s ip=%s path=%s status=%d reason=%s",

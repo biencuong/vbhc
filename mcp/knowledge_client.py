@@ -158,6 +158,31 @@ def _http_get(
         raise KBError(f"Network error {url}: {e}") from e
 
 
+def _http_post(
+    url: str,
+    api_key: str,
+    body: bytes,
+    content_type: str = "application/octet-stream",
+    timeout: int = 60,
+) -> tuple[bytes, int]:
+    """POST raw bytes với Bearer. Trả (response_body, status). Raise KBError nếu lỗi."""
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Authorization", f"Bearer {api_key}")
+    req.add_header("Content-Type", content_type)
+    req.add_header("Content-Length", str(len(body)))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read(), resp.status
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            err_body = ""
+        raise KBError(f"HTTP {e.code} POST {url}: {err_body}") from e
+    except urllib.error.URLError as e:
+        raise KBError(f"Network error POST {url}: {e}") from e
+
+
 def _save_atomic(path: Path, body: bytes):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -260,6 +285,52 @@ def sync_manifest(timeout: int = 30) -> dict[str, Any]:
     info = pull_asset("manifest", use_etag=True, timeout=timeout)
     data = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     return {**info, "manifest": data}
+
+
+def publish_template(slug: str, source_path: Path | None = None,
+                     timeout: int = 60) -> dict[str, Any]:
+    """Upload 1 template từ local cache lên cloud KB Hub.
+
+    Args:
+        slug: slug loại VB (vd "bao-cao"). Phải khớp [a-z0-9][a-z0-9_-]*.
+        source_path: file .docx nguồn. Default: ~/.vbhc/cache/templates/<slug>.docx
+                     (file mà vbhc_update_template ghi xuống).
+        timeout: HTTP timeout.
+
+    Returns:
+        dict response từ server: {ok, slug, sha256, size, archived_to,
+        manifest_generated}. Raise KBError nếu network fail hoặc HTTP error.
+
+    Note: server yêu cầu key có scope `admin`. 403 nếu thiếu.
+    """
+    cfg = load_config()
+    if not cfg.get("cloud_url") or not cfg.get("api_key"):
+        raise KBError("Chưa có cloud_url/api_key — chạy bootstrap trước.")
+
+    src = source_path or cache_path_for("templates", f"{slug}.docx")
+    src = Path(src)
+    if not src.is_file():
+        raise KBError(f"Không tìm thấy template tại {src} — chạy vbhc_update_template trước.")
+
+    body = src.read_bytes()
+    url_path = url_path_for("templates", f"{slug}.docx")
+    url = _build_url(cfg["cloud_url"], url_path)
+
+    resp_body, status = _http_post(
+        url, cfg["api_key"], body,
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+        timeout=timeout,
+    )
+    try:
+        result = json.loads(resp_body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise KBError(f"Response không parse được JSON: {e} — raw: {resp_body[:200]!r}")
+
+    if status != 200 or not result.get("ok"):
+        raise KBError(f"Publish failed (status={status}): {result}")
+    return result
 
 
 def pull_if_missing(kind: str, name: str) -> dict[str, Any]:
