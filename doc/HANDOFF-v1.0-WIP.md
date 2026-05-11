@@ -53,7 +53,7 @@ Xem `PLAN-v1.0.md` (cùng folder) để biết chi tiết.
 |---|---|---|---|
 | 1 | Cloud Knowledge Hub (FastAPI serve assets) | ✅ **DONE** | 1.5 ngày |
 | 1.5 | Extract rules → YAML (data-driven) | ✅ **DONE** | 1 ngày |
-| 2 | Local sync + auto-bootstrap | 🟡 **WIP ~80%** | còn ~0.3 ngày |
+| 2 | Local sync + auto-bootstrap | ✅ **DONE** (commit 2f8b56a, 2026-05-11) | — |
 | 3 | PowerShell installer (.ps1) | ⏳ pending | 1 ngày |
 | 4 | Admin publish workflow | ⏳ pending | 0.5 ngày |
 | 5 | Migration v0.9 → v1.0 + cleanup | ⏳ pending | 1 ngày |
@@ -216,27 +216,18 @@ vbhc_classify("Tờ trình xin chủ trương") → match "Tờ trình"
 rules_source("loai-vb") → "cache"  (xác nhận đọc từ cache đã pull, không từ bundled)
 ```
 
-### Việc còn lại trong Phase 2 (~20%)
+### Việc đã đóng Phase 2 (commit 2f8b56a, 2026-05-11)
 
-**Việc nhỏ — TODO ngắn:**
+1. ✅ **Offline smoke test** — 3 scenarios PASS với `PYTHONIOENCODING=utf-8` + isolated test env trỏ port chết (`127.0.0.1:9`, timeout 2s). Test script: `C:\Users\AD\AppData\Local\Temp\test_offline_ensure_asset.py`.
+   - Cache hit + fresh → `{pulled: False, fresh: True}`
+   - Cache stale + offline → `{pulled: False, stale: True, offline_reason: "..."}`
+   - Cache missing + offline → raise `KBError`
 
-1. **Smoke test cuối: offline scenario** (đang dở khi user interrupt)
-   - Server tắt → `ensure_asset` với cache hit → trả ngay (fresh)
-   - Server tắt → `ensure_asset` với TTL=0 (force) → cache có nhưng stale → trả với `offline_reason`
-   - Server tắt → `ensure_asset` cho asset chưa có → raise `KBError`
-   - **Đã test một phần — bị UnicodeEncodeError do Vietnamese chars trong print với cp1252. Retry với `PYTHONIOENCODING=utf-8`.**
+2. ✅ **Refactor `vbhc_update_template`** — đổi target từ `SKILL_DIR/resources/templates/` sang `kc.cache_path_for("templates", f"{slug}.docx")` = `~/.vbhc/cache/templates/<slug>.docx`. Sau khi ghi, `_resolve_template_path` tìm thấy slug ngay (đã smoke test). Preview & message mention Phase 4 publish workflow.
 
-2. **ETag — improvement nhỏ (optional)**
-   - Hiện `FileResponse` của Starlette không emit `ETag` header → mọi re-sync trả 200 (re-download), không 304.
-   - Fix: emit ETag từ sha256 manifest trong handler, hoặc dùng `last-modified` thay (Starlette có hỗ trợ `If-Modified-Since`).
-   - Không critical — sync vẫn correct, chỉ tốn băng thông hơn.
+3. ✅ **Cập nhật `mcp/README.md`** — refresh count 5 → 13 tools, document `vbhc_sync_knowledge` + `vbhc_knowledge_status` chi tiết, thêm section "Cache layout (v1.0+)" + bootstrap workflow + troubleshooting cloud sync.
 
-3. **Refactor `vbhc_update_template`** (Phase 2 task list)
-   - Tool này hiện ghi vào `SKILL_DIR/resources/templates/` (read-only trong v1.0).
-   - Cần ghi vào `~/.vbhc/cache/templates/` (local cache) — để Phase 4 (publish) push lên cloud từ đây.
-   - Code: `mcp/server.py` ~line 1021-1097 (function `vbhc_update_template`).
-
-4. **Tài liệu nhỏ — bổ sung vào `mcp/README.md`** mới-tools (`vbhc_sync_knowledge`, `vbhc_knowledge_status`).
+4. ⏸ **ETag — improvement nhỏ (optional, defer)** — hiện `FileResponse` không emit ETag → mọi re-sync trả 200. Không critical, sync vẫn correct. Có thể fix sau Phase 5.
 
 ---
 
@@ -464,13 +455,9 @@ rm -rf "$VBHC_HOME"
 
 ## 13. Tasks cho phiên tiếp theo
 
-**Ưu tiên 1 — Đóng Phase 2 (~0.3 ngày):**
-1. Retry offline test với `PYTHONIOENCODING=utf-8` (xác nhận `ensure_asset` cache hit + stale fallback + missing → KBError)
-2. Refactor `vbhc_update_template` (server.py ~line 1021) ghi vào `~/.vbhc/cache/templates/` thay vì `SKILL_DIR/resources/`
-3. Cập nhật `mcp/README.md` với 2 tool mới
-4. **Đẩy git** (xem `git_push_skill_vbhc.md` — không cần hỏi confirm)
+**Phase 2 đã đóng** (commit 2f8b56a, 2026-05-11). Sang Phase 3.
 
-**Ưu tiên 2 — Phase 3 (1 ngày):**
+**Ưu tiên 1 — Phase 3 (1 ngày):**
 - Viết `cloud/install.ps1` theo specs ở section 6
 - Viết `cloud/uninstall.ps1`
 - Viết `INSTALL-LOCAL.md`
