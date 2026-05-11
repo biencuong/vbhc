@@ -56,7 +56,7 @@ Xem `PLAN-v1.0.md` (cùng folder) để biết chi tiết.
 | 2 | Local sync + auto-bootstrap | ✅ **DONE** (commit 2f8b56a, 2026-05-11) | — |
 | 3 | PowerShell installer (.ps1) | ✅ **DONE** (2026-05-11) | — |
 | 4 | Admin publish workflow | ✅ **DONE** (2026-05-12) | — |
-| 5 | Migration v0.9 → v1.0 + cleanup | ⏳ pending | 1 ngày |
+| 5 | Migration v0.9 → v1.0 + cleanup | ✅ **DONE** — released v1.0.0 (commit 02111fe, tag v1.0.0, 2026-05-12) | — |
 
 ---
 
@@ -473,22 +473,26 @@ rm -rf "$VBHC_HOME"
 
 ## 13. Tasks cho phiên tiếp theo
 
-**Phase 2 + 3 + 4 đã đóng** (2026-05-11/12). Sang Phase 5 — release v1.0.0.
+**Tất cả 5 Phase đã đóng. v1.0.0 đã release** (tag v1.0.0, commit 02111fe, 2026-05-12).
 
-**Ưu tiên 1 — Phase 5 (1 ngày):**
-- `MIGRATION-v1.0.md`
-- Gỡ HTTP mode trong server.py
-- Cập nhật README, SKILL.md, HANDOFF.md (root)
-- Tag `v1.0.0`
+**Ưu tiên 1 — Deploy v1.0 lên VPS production:**
+- SSH vào VPS, `cd /home/mcp-soan-thao-vbhc && git fetch && git checkout v1.0.0`
+- `./venv/bin/pip install -e mcp/` (cài deps mới: pyyaml uvicorn starlette nếu chưa có)
+- `./venv/bin/python cloud/build_manifest.py --kb-dir /var/lib/vbhc-kb --import-from-repo .` (sẽ copy install.ps1 + uninstall.ps1 vào KB_DIR)
+- `sudo cp cloud/vbhc-kb.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now vbhc-kb`
+- **Quan trọng**: stop `vbhc-mcp.service` (HTTP cũ) — endpoint `/mcp` không còn
+- Sửa nginx aaPanel: thêm `location /kb`, `location /install.ps1`, `location /uninstall.ps1`, `location /healthz` trỏ `127.0.0.1:8766`; gỡ `location /mcp`
+- Cấp scope `admin` cho key dev: `./venv/bin/python scripts/manage_keys.py grant <admin-id> admin && systemctl restart vbhc-kb`
+- Test 1-liner installer trên máy mới: `iwr https://mcp.hagiang.edu.vn/install.ps1 | iex`
 
-**Việc deploy lên VPS (sau khi xong Phase 5):**
-- SSH vào `mcp.hagiang.edu.vn`
-- `git pull` repo
-- Run `cloud/build_manifest.py --import-from-repo .` để sinh KB_DIR
-- Copy `cloud/install.ps1` + `cloud/uninstall.ps1` vào KB_DIR (cùng chỗ với manifest) để route `/install.ps1` + `/uninstall.ps1` serve được
-- Install systemd `vbhc-kb.service`
-- Sửa nginx aaPanel thêm `location /kb` + `location /install.ps1` + `location /uninstall.ps1`
-- Test 1-liner installer trên máy thật (chưa cài)
+**Ưu tiên 2 — Migration user thật:**
+- Sau khi VPS deploy xong + 1-liner installer verified, thông báo cho cán bộ đang dùng v0.9
+- Hướng dẫn họ chạy `MIGRATION-v1.0.md` (3 bước) — endpoint cũ `/mcp` đã không còn nên họ buộc phải migrate
+
+**Ưu tiên 3 — Phase 4.5 (optional, nice-to-have):**
+- `vbhc_publish_rule(name)` — admin push rule YAML mới
+- Rollback CLI tool — admin restore từ `templates-archive/`
+- ETag emit trong `FileResponse` của kb_server (giảm băng thông re-sync)
 
 ---
 
@@ -498,4 +502,4 @@ Xem file đầy đủ tại `doc/PLAN-v1.0.md` (đã copy từ `~/.claude/plans/
 
 ---
 
-*Tạo bởi Claude Opus 4.7, 2026-05-11. Phiên tiếp theo (Codex) bắt đầu từ section 13.*
+*Tạo bởi Claude Opus 4.7, 2026-05-11. Cập nhật 2026-05-12 — v1.0.0 released. Phiên tiếp theo: VPS deploy (section 13).*
