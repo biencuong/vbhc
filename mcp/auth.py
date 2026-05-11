@@ -36,7 +36,6 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -163,80 +162,131 @@ class APIKeyConfig:
 
 
 # =====================================================================
-# Middleware
+# Middleware (pure ASGI — Starlette 1.0+ compat)
 # =====================================================================
+# v0.9 dùng BaseHTTPMiddleware. Starlette 1.0 đã đổi cách xử lý exception
+# groups (collapse_excgroups) trong BaseHTTPMiddleware — khi `dispatch`
+# return Response trực tiếp (không await call_next) thì raise ngược → 500.
+# Pure ASGI tránh vấn đề này hoàn toàn.
 
-class APIKeyMiddleware(BaseHTTPMiddleware):
-    """Starlette middleware: yêu cầu Bearer token hợp lệ cho mọi request."""
+class APIKeyMiddleware:
+    """Pure ASGI middleware enforcing Bearer API key auth.
 
-    def __init__(self, app, config: APIKeyConfig):
-        super().__init__(app)
+    Sau khi auth OK, gán `request.state.api_key_rec = rec` để route handler
+    inspect scope (vd POST /kb/templates check scope `admin`).
+    """
+
+    def __init__(self, app, config: "APIKeyConfig"):
+        self.app = app
         self.config = config
 
-    async def dispatch(self, request: Request, call_next):
-        # Lấy IP nguồn — nginx forward qua X-Real-IP / X-Forwarded-For
-        ip = (
-            request.headers.get("X-Real-IP")
-            or (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
-            or (request.client.host if request.client else "")
-        )
-        path = request.url.path
+    async def __call__(self, scope: dict, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-        auth = request.headers.get("Authorization", "")
+        # Headers map (case-insensitive)
+        raw_headers = scope.get("headers") or []
+        headers: dict[str, str] = {}
+        for k, v in raw_headers:
+            try:
+                headers[k.decode("latin-1").lower()] = v.decode("latin-1")
+            except Exception:
+                continue
+
+        ip = (
+            headers.get("x-real-ip")
+            or (headers.get("x-forwarded-for") or "").split(",")[0].strip()
+            or (scope.get("client")[0] if scope.get("client") else "")
+        )
+        path = scope.get("path", "")
+        method = scope.get("method", "")
+
+        auth = headers.get("authorization", "")
         if not auth.lower().startswith("bearer "):
-            return self._reject(401, "Missing 'Authorization: Bearer <key>' header",
-                                ip, path, kid="-")
+            await self._reject(send, 401,
+                               "Missing 'Authorization: Bearer <key>' header",
+                               ip, path, kid="-")
+            return
 
         key = auth[7:].strip()
         rec = self.config.lookup(key)
         if rec is None:
-            return self._reject(401, "Invalid API key", ip, path, kid="?")
+            await self._reject(send, 401, "Invalid API key", ip, path, kid="?")
+            return
 
         kid = rec.get("id", "?")
 
         if rec.get("revoked"):
-            return self._reject(401, f"API key '{kid}' đã bị revoke",
-                                ip, path, kid=kid)
+            await self._reject(send, 401, f"API key '{kid}' đã bị revoke",
+                               ip, path, kid=kid)
+            return
 
         allowed_ips = rec.get("allowed_ips") or []
         if allowed_ips and ip and ip not in allowed_ips:
-            return self._reject(403, f"IP {ip} không được phép cho key '{kid}'",
-                                ip, path, kid=kid)
+            await self._reject(send, 403,
+                               f"IP {ip} không được phép cho key '{kid}'",
+                               ip, path, kid=kid)
+            return
 
         if not self.config.take_token(rec):
-            return self._reject(429,
-                                f"Rate limit vượt ({rec.get('rate_limit_per_minute', 120)}/min)",
-                                ip, path, kid=kid)
+            await self._reject(send, 429,
+                               f"Rate limit vượt ({rec.get('rate_limit_per_minute', 120)}/min)",
+                               ip, path, kid=kid)
+            return
 
         self.config.mark_used(rec)
 
-        # Expose record cho route handler (vd kb_server check scope cho POST)
-        request.state.api_key_rec = rec
+        # Expose record cho route handler qua request.state.api_key_rec.
+        # Starlette stores state ở scope["state"] = dict; Request.state property
+        # wrap dict đó bằng class State (attribute access). Set dict key trực
+        # tiếp để cả Request.state.api_key_rec lẫn scope["state"]["api_key_rec"]
+        # đều đọc được.
+        scope.setdefault("state", {})["api_key_rec"] = rec
+
+        # Capture downstream status để log
+        status_holder = {"code": 0}
+        async def send_wrapper(message):
+            if message.get("type") == "http.response.start":
+                status_holder["code"] = message.get("status", 0)
+            await send(message)
 
         try:
-            resp = await call_next(request)
+            await self.app(scope, receive, send_wrapper)
         except Exception:
             log.exception("Request handler error path=%s kid=%s", path, kid)
             raise
 
         log.info("auth_ok kid=%s ip=%s method=%s path=%s status=%d",
-                 kid, ip, request.method, path, resp.status_code)
-        return resp
+                 kid, ip, method, path, status_holder["code"])
+
+    @staticmethod
+    async def _reject(send, status: int, reason: str,
+                      ip: str, path: str, kid: str):
+        log.warning("auth_deny kid=%s ip=%s path=%s status=%d reason=%s",
+                    kid, ip, path, status, reason)
+        body = json.dumps({"error": reason}, ensure_ascii=False).encode("utf-8")
+        headers = [
+            (b"content-type", b"application/json; charset=utf-8"),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ]
+        if status == 401:
+            headers.append((b"www-authenticate", b'Bearer realm="vbhc"'))
+        await send({
+            "type": "http.response.start",
+            "status": status,
+            "headers": headers,
+        })
+        await send({
+            "type": "http.response.body",
+            "body": body,
+        })
 
 
 def has_scope(rec: dict, scope: str) -> bool:
     """Backward compat: record không có 'scope' → coi như ['read']."""
     scopes = rec.get("scope") or ["read"]
     return scope in scopes
-
-    def _reject(self, status: int, reason: str, ip: str, path: str, kid: str) -> Response:
-        log.warning("auth_deny kid=%s ip=%s path=%s status=%d reason=%s",
-                    kid, ip, path, status, reason)
-        body = json.dumps({"error": reason}, ensure_ascii=False)
-        headers = {"Content-Type": "application/json; charset=utf-8"}
-        if status == 401:
-            headers["WWW-Authenticate"] = 'Bearer realm="vbhc"'
-        return Response(body, status_code=status, headers=headers)
 
 
 # =====================================================================
