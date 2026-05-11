@@ -6,6 +6,7 @@ chỉ làm "nguồn chân lý" cho các thứ chia sẻ trong tổ chức.
 Routes:
     GET  /healthz                          (public)  — health check
     GET  /install.ps1                      (public)  — PowerShell installer 1-liner
+    GET  /uninstall.ps1                    (public)  — PowerShell uninstaller 1-liner
     GET  /kb/manifest.json                 (auth)    — version + url của mọi asset
     GET  /kb/templates/<name>.docx         (auth)    — binary template
     GET  /kb/rules/<name>.yaml             (auth)    — YAML rule
@@ -114,19 +115,35 @@ INSTALL_PS1_FALLBACK = """\
 Write-Host "[vbhc] Installer chưa sẵn sàng. Liên hệ admin." -ForegroundColor Yellow
 """
 
+UNINSTALL_PS1_FALLBACK = """\
+# vbhc uninstaller placeholder — chưa được tải lên KB_DIR
+Write-Host "[vbhc] Uninstaller chưa sẵn sàng. Liên hệ admin." -ForegroundColor Yellow
+"""
 
-async def install_ps1(request: Request) -> Response:
-    """Serve PowerShell installer. Public (không cần auth) để 1-liner chạy được:
-        iwr https://mcp.hagiang.edu.vn/install.ps1 | iex
-    """
-    p = KB.kb_dir / "install.ps1"
+
+def _serve_ps1(filename: str, fallback: str) -> Response:
+    p = KB.kb_dir / filename
     if p.is_file():
         return FileResponse(
             str(p),
             media_type="text/plain; charset=utf-8",
             headers={"Cache-Control": "no-cache"},
         )
-    return PlainTextResponse(INSTALL_PS1_FALLBACK, media_type="text/plain; charset=utf-8")
+    return PlainTextResponse(fallback, media_type="text/plain; charset=utf-8")
+
+
+async def install_ps1(request: Request) -> Response:
+    """Serve PowerShell installer. Public (không cần auth) để 1-liner chạy được:
+        iwr https://mcp.hagiang.edu.vn/install.ps1 | iex
+    """
+    return _serve_ps1("install.ps1", INSTALL_PS1_FALLBACK)
+
+
+async def uninstall_ps1(request: Request) -> Response:
+    """Serve PowerShell uninstaller. Public để 1-liner gỡ chạy được:
+        iwr https://mcp.hagiang.edu.vn/uninstall.ps1 | iex
+    """
+    return _serve_ps1("uninstall.ps1", UNINSTALL_PS1_FALLBACK)
 
 
 # =====================================================================
@@ -247,6 +264,7 @@ def build_app(api_keys: APIKeyConfig) -> Starlette:
     public_routes = [
         Route("/healthz", healthz, methods=["GET"]),
         Route("/install.ps1", install_ps1, methods=["GET"]),
+        Route("/uninstall.ps1", uninstall_ps1, methods=["GET"]),
     ]
 
     # Paths đây KHÔNG có prefix /kb — Mount("/kb", ...) sẽ strip prefix trước khi

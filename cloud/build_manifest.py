@@ -127,6 +127,13 @@ def import_assets_from_repo(repo: Path, kb_dir: Path):
         get_git_version(repo) + "\n", encoding="utf-8"
     )
 
+    # PowerShell installer + uninstaller — kb_server serve qua /install.ps1
+    # và /uninstall.ps1 (public routes). Copy lên KB_DIR root.
+    for ps1 in ("install.ps1", "uninstall.ps1"):
+        src = repo / "cloud" / ps1
+        if src.is_file():
+            shutil.copy2(src, kb_dir / ps1)
+
 
 def build_manifest(kb_dir: Path) -> dict:
     templates = scan_dir(kb_dir, "templates", "/kb/templates", (".docx",))

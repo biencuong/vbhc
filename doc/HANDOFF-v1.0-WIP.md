@@ -54,7 +54,7 @@ Xem `PLAN-v1.0.md` (cùng folder) để biết chi tiết.
 | 1 | Cloud Knowledge Hub (FastAPI serve assets) | ✅ **DONE** | 1.5 ngày |
 | 1.5 | Extract rules → YAML (data-driven) | ✅ **DONE** | 1 ngày |
 | 2 | Local sync + auto-bootstrap | ✅ **DONE** (commit 2f8b56a, 2026-05-11) | — |
-| 3 | PowerShell installer (.ps1) | ⏳ pending | 1 ngày |
+| 3 | PowerShell installer (.ps1) | ✅ **DONE** (2026-05-11) | — |
 | 4 | Admin publish workflow | ⏳ pending | 0.5 ngày |
 | 5 | Migration v0.9 → v1.0 + cleanup | ⏳ pending | 1 ngày |
 
@@ -241,38 +241,44 @@ Cán bộ Windows chạy **1 lệnh** là cài xong:
 iwr https://mcp.hagiang.edu.vn/install.ps1 | iex
 ```
 
-### Specs
+### Đã làm (2026-05-11)
 
-File: `cloud/install.ps1` (hosted tại `/install.ps1` public route, có sẵn 200 OK fallback).
+| File | Vai trò |
+|---|---|
+| `cloud/install.ps1` *(mới, UTF-8 BOM)* | 1-liner installer. Detect Python ≥3.10, tạo `%LOCALAPPDATA%\vbhc\{repo,venv}\`, clone repo (fallback tarball zip), `pip install mcp python-docx openpyxl pyyaml uvicorn starlette`, prompt URL/key/org (hoặc nhận qua params), gọi `python mcp/bootstrap.py` (KHÔNG dùng `-m mcp.bootstrap` — conflict site-packages), `claude mcp add vbhc -s user -- ...`, smoke test = `bootstrap --status`. |
+| `cloud/uninstall.ps1` *(mới, UTF-8 BOM)* | Gỡ entry MCP qua `claude mcp remove vbhc -s user`, xoá `%LOCALAPPDATA%\vbhc\`. Mặc định **giữ** `~/.vbhc/` (config + cache); `-PurgeAll` để xoá luôn. |
+| `INSTALL-LOCAL.md` *(mới, root)* | Tài liệu non-tech: prereqs, 1-liner + tham số admin, troubleshooting (Python missing / 401 / 403 / Claude Desktop manual register / cài lại), vị trí file. |
 
-**Logic:**
-1. Detect Python (3.10+). Nếu không có → tải Python embeddable từ python.org và cài vào `%LOCALAPPDATA%\vbhc\python\` (hoặc dùng winget nếu có).
-2. Tạo venv tại `%LOCALAPPDATA%\vbhc\venv\`
-3. Tải repo zip từ VPS (cần endpoint mới `/kb/code/repo.zip` hoặc git clone — chọn 1).
-   - Đề xuất: GET `https://mcp.hagiang.edu.vn/kb/code/scripts.tar.gz` + clone phần `mcp/`. Hoặc đơn giản: `git clone https://github.com/biencuong/vbhc.git`.
-4. `pip install -e .` (cần `pyproject.toml` cho whole repo) hoặc `pip install mcp python-docx openpyxl pyyaml uvicorn starlette`.
-5. Prompt user:
-   - Cloud URL (default: `https://mcp.hagiang.edu.vn`)
-   - API key (từ admin cấp)
-   - Org ID (tùy chọn)
-6. Gọi `python -m mcp.bootstrap --url $url --key $key --org $org`
-7. Register MCP trong Claude Code config:
-   - File: `%APPDATA%\Claude\claude_desktop_config.json` (Claude Desktop) hoặc `%USERPROFILE%\.claude.json` cho Claude Code
-   - Add entry: `{"mcpServers": {"vbhc": {"command": "python", "args": ["<install_dir>\\mcp\\server.py"]}}}`
-8. Smoke test: in `vbhc_knowledge_status` output → confirm thấy 11+2 tool
+### Quirks học được (cần nhớ)
 
-**Uninstaller** `cloud/uninstall.ps1`:
-- Remove `%LOCALAPPDATA%\vbhc\`
-- Remove entry trong Claude config
-- Tùy chọn giữ `~/.vbhc/` (config + cache) hay xóa
+1. **UTF-8 BOM bắt buộc** cho `.ps1` chứa tiếng Việt — Windows PowerShell 5.1 dùng codepage hệ thống nếu thiếu BOM. Add bằng `python -c "open(f,'wb').write(b'\xef\xbb\xbf' + open(f,'rb').read())"`.
 
-**Tài liệu:** `INSTALL-LOCAL.md` mô tả flow cho non-tech user.
+2. **Không dùng `python -m mcp.bootstrap`** — site-packages `mcp` (lib chính thức) mask local `mcp/` folder (no `__init__.py`). Invoke trực tiếp script: `python <repo>/mcp/bootstrap.py`.
 
-### Test plan
+3. **Test isolated** dùng `VBHC_HOME` env var: `VBHC_HOME=C:\Temp\test-home powershell -File install.ps1 -SkipMcpRegister -McpName vbhc-test ...`. Tránh đụng real config + Claude entry.
 
-- Máy Windows sạch (chưa có Python) → 1-liner → Claude Code restart → thấy tools
-- Máy đã có Python → vẫn cài được, không phá Python global
-- Máy đã có config cũ → confirm overwrite
+### Test đã pass (2026-05-11)
+
+```
+VBHC_HOME=C:\Users\AD\AppData\Local\Temp\vbhc-install-test-home \
+powershell -ExecutionPolicy Bypass -File cloud\install.ps1 \
+    -NonInteractive \
+    -InstallDir C:\...\vbhc-install-test \
+    -CloudUrl http://127.0.0.1:8766 \
+    -ApiKey vbhc_devkey... \
+    -OrgId so-gddt-tuyen-quang \
+    -SkipMcpRegister
+```
+
+→ 8 steps PASS (Python ✓, dir ✓, git clone ✓, venv+pip ✓, prompt skip ✓, bootstrap sync 3 templates+3 rules+2 code ✓, mcp register skipped, smoke status JSON drift=empty ✓).
+
+Uninstall: `powershell -File cloud\uninstall.ps1 -NonInteractive -InstallDir ... -McpName vbhc-test-NEVER-EXIST` → InstallDir cleaned ✓, `~/.vbhc/` giữ (default) ✓.
+
+### Test plan còn chưa làm (defer Phase 5)
+
+- Máy Windows sạch (chưa có Python) — test friendly error message + winget hint
+- Claude Desktop (không có `claude` CLI) — verify manual register instruction
+- Mạng có proxy/firewall — verify error messages clear
 
 ---
 
@@ -455,20 +461,15 @@ rm -rf "$VBHC_HOME"
 
 ## 13. Tasks cho phiên tiếp theo
 
-**Phase 2 đã đóng** (commit 2f8b56a, 2026-05-11). Sang Phase 3.
+**Phase 2 + Phase 3 đã đóng** (commits 2f8b56a + 595dace + 2026-05-11). Sang Phase 4.
 
-**Ưu tiên 1 — Phase 3 (1 ngày):**
+**Ưu tiên 1 — Phase 4 (0.5 ngày):**
 - Viết `cloud/install.ps1` theo specs ở section 6
-- Viết `cloud/uninstall.ps1`
-- Viết `INSTALL-LOCAL.md`
-- Test trên VM Windows sạch (hoặc tạm dùng máy khác)
-
-**Ưu tiên 3 — Phase 4 (0.5 ngày):**
 - Thêm `scope` vào api-keys schema + manage_keys.py
 - POST handler trong kb_server.py
 - Tool `vbhc_publish_template` trong server.py
 
-**Ưu tiên 4 — Phase 5 (1 ngày):**
+**Ưu tiên 2 — Phase 5 (1 ngày):**
 - `MIGRATION-v1.0.md`
 - Gỡ HTTP mode trong server.py
 - Cập nhật README, SKILL.md, HANDOFF.md (root)
@@ -478,9 +479,10 @@ rm -rf "$VBHC_HOME"
 - SSH vào `mcp.hagiang.edu.vn`
 - `git pull` repo
 - Run `cloud/build_manifest.py --import-from-repo .` để sinh KB_DIR
+- Copy `cloud/install.ps1` + `cloud/uninstall.ps1` vào KB_DIR (cùng chỗ với manifest) để route `/install.ps1` + `/uninstall.ps1` serve được
 - Install systemd `vbhc-kb.service`
-- Sửa nginx aaPanel thêm `location /kb` + `location /install.ps1`
-- Test 1-liner installer
+- Sửa nginx aaPanel thêm `location /kb` + `location /install.ps1` + `location /uninstall.ps1`
+- Test 1-liner installer trên máy thật (chưa cài)
 
 ---
 
