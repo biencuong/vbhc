@@ -142,8 +142,54 @@ def search_and_replace_doc(doc, find: str, repl: str) -> int:
 
 
 # ---- VB classifier ----
+#
+# Rules nguồn: tri-thuc-template/rules/loai-vb.yaml (qua scripts/rules_loader.py).
+# Hardcode dưới đây là fallback khi YAML thiếu (offline first-run, etc.).
+# ----------------------------------------------------------------------
 
-CLASSIFY_RULES = [
+from rules_loader import load_rules  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import knowledge_client as kc  # noqa: E402
+
+
+def _resolve_template_path(spec: str) -> Path:
+    """Resolve template spec → Path:
+       1. Nếu spec là path (có sep hoặc tồn tại trên disk) → resolve tuyệt đối
+       2. Nếu spec là slug (vd "bao-cao") → tìm ~/.vbhc/cache/templates/<slug>.docx
+       3. Fallback bundled: SKILL_DIR/resources/templates/<slug>.docx
+       4. Nếu cache thiếu + có cloud config → auto-pull blocking trước khi raise.
+    """
+    raw = spec
+    if any(sep in raw for sep in ("/", "\\")) or raw.endswith(".docx"):
+        # Cho phép cả "bao-cao.docx" → coi như slug nếu không có separator
+        if not any(sep in raw for sep in ("/", "\\")):
+            slug = raw[:-5] if raw.endswith(".docx") else raw
+        else:
+            return Path(raw).expanduser().resolve()
+    else:
+        slug = raw
+
+    cache_p = kc.CACHE_DIR / "templates" / f"{slug}.docx"
+    if cache_p.is_file():
+        return cache_p
+
+    # Auto-bootstrap: thử pull từ cloud nếu đã config
+    if kc.is_configured():
+        try:
+            kc.ensure_asset("templates", f"{slug}.docx")
+            if cache_p.is_file():
+                return cache_p
+        except kc.KBError:
+            pass
+
+    bundled = SKILL_DIR / "resources" / "templates" / f"{slug}.docx"
+    if bundled.is_file():
+        return bundled
+
+    # Nếu vẫn không có — trả Path(raw) để caller báo lỗi rõ ràng (file not found)
+    return Path(raw).expanduser().resolve()
+
+_CLASSIFY_FALLBACK = [
     (r"xin\s+ý\s+kiến|lấy\s+ý\s+kiến|tham\s+gia\s+ý\s+kiến", "Công văn xin ý kiến"),
     (r"phiếu\s+(biểu\s+quyết|ghi\s+ý\s+kiến)", "Phiếu biểu quyết / Phiếu ghi ý kiến"),
     (r"tờ\s+trình|kính\s+trình", "Tờ trình"),
@@ -159,17 +205,7 @@ CLASSIFY_RULES = [
     (r"công\s+văn|công\s+điện", "Công văn"),
 ]
 
-# ----------------------------------------------------------------------
-# Ambiguous form detection: VB phản hồi (trả lời/góp ý) có thể là Báo cáo
-# hoặc Công văn — quyết định bởi yêu cầu của VB nguồn.
-#
-# Vd: "Báo cáo góp ý dự thảo Thông tư X" (khi nguồn yêu cầu báo cáo)
-#  vs "Công văn góp ý dự thảo Thông tư X" (khi nguồn yêu cầu công văn).
-#
-# Áp dụng tương tự: "phản ánh", "trả lời chất vấn", "phúc đáp"...
-# Khi match → set ambiguous_forms để AI hỏi user chốt dạng VB.
-# ----------------------------------------------------------------------
-AMBIGUOUS_FORM_PATTERNS = [
+_AMBIGUOUS_FALLBACK = [
     {
         "pattern": r"góp\s+ý|tham\s+gia\s+ý\s+kiến|phản\s+hồi|trả\s+lời",
         "context_hint": "VB phản hồi/góp ý",
@@ -198,6 +234,28 @@ AMBIGUOUS_FORM_PATTERNS = [
 ]
 
 
+def _get_classify_rules() -> list[tuple[str, str]]:
+    """Load classify rules từ YAML (cache→bundled), fallback hardcode nếu thiếu."""
+    data = load_rules("loai-vb")
+    if not data or not data.get("classify_rules"):
+        return _CLASSIFY_FALLBACK
+    return [(r["pattern"], r["type"]) for r in data["classify_rules"]
+            if r.get("pattern") and r.get("type")]
+
+
+def _get_ambiguous_patterns() -> list[dict]:
+    """Load ambiguous forms từ YAML, fallback hardcode nếu thiếu."""
+    data = load_rules("loai-vb")
+    if not data or not data.get("ambiguous_forms"):
+        return _AMBIGUOUS_FALLBACK
+    return data["ambiguous_forms"]
+
+
+# Backward-compat aliases (code cũ có thể import 2 biến này)
+CLASSIFY_RULES = _get_classify_rules()
+AMBIGUOUS_FORM_PATTERNS = _get_ambiguous_patterns()
+
+
 # ---- MCP server ----
 
 mcp = FastMCP("vbhc")
@@ -218,13 +276,15 @@ def vbhc_classify(description: str) -> dict:
     """
     desc_lower = description.lower()
     matches = []
-    for pattern, label in CLASSIFY_RULES:
+    # Gọi helper mỗi call → sau khi vbhc_sync_knowledge (Phase 2) clear_cache(),
+    # lần classify tiếp theo sẽ dùng rules YAML mới nhất.
+    for pattern, label in _get_classify_rules():
         if re.search(pattern, desc_lower):
             matches.append({"type": label, "confidence": "high"})
 
     # Detect ambiguous-form context (góp ý / phúc đáp / đề xuất...)
     ambiguous = []
-    for rule in AMBIGUOUS_FORM_PATTERNS:
+    for rule in _get_ambiguous_patterns():
         if re.search(rule["pattern"], desc_lower):
             ambiguous.append({
                 "context": rule["context_hint"],
@@ -395,7 +455,11 @@ def vbhc_fill_template(
     table cells (common after .doc → .docx conversion).
 
     Args:
-        template_path: Source .docx file.
+        template_path: Source .docx — chấp nhận 2 dạng:
+            • Path tuyệt đối/tương đối (chứa / hoặc \\) → dùng nguyên path
+            • Slug (vd "bao-cao", "cong-van") → tự resolve từ ~/.vbhc/cache/
+              fallback bundled SKILL_DIR/resources/templates/. Tự auto-pull
+              từ cloud KB nếu cache thiếu và đã config.
         output_path: Where to save the filled .docx.
         cell_ops: List of {table_idx, row_idx, col_idx, text} operations.
         paragraph_ops: List of {paragraph_idx, text} operations.
@@ -404,11 +468,11 @@ def vbhc_fill_template(
     Returns:
         dict with: output_path, ops_applied, warnings
     """
-    src = Path(template_path).resolve()
-    dst = Path(output_path).resolve()
+    src = _resolve_template_path(template_path)
+    dst = Path(output_path).expanduser().resolve()
 
     if not src.is_file():
-        return {"error": f"Template not found: {src}"}
+        return {"error": f"Template not found: {src} (resolved from {template_path!r})"}
 
     if src != dst:
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -1023,8 +1087,8 @@ def vbhc_update_template(
     target_loai_vb: str,
     confirmed: bool = False,
 ) -> dict:
-    """Lưu 1 file Word đã được duyệt làm TEMPLATE chuẩn cho 1 loại VB
-    (resources/templates/<target_loai_vb>.docx).
+    """Lưu 1 file Word đã được duyệt làm TEMPLATE chuẩn cho 1 loại VB,
+    ghi vào LOCAL CACHE (~/.vbhc/cache/templates/<target_loai_vb>.docx).
 
     AI gọi tool này khi user nói: "cập nhật mẫu", "lưu file này thành template",
     "thay template loại X bằng file này", thường sau khi đã chạy
@@ -1033,7 +1097,11 @@ def vbhc_update_template(
     Workflow chuẩn (LUÔN qua 2 bước):
       1. confirmed=False → tool trả preview + cảnh báo (file đích đã có hay chưa,
          còn lỗi ND30 cần sửa không). AI hiển thị cho user.
-      2. User OK → confirmed=True → tool copy file vào resources/templates/.
+      2. User OK → confirmed=True → tool copy file vào ~/.vbhc/cache/templates/.
+
+    Sau khi ghi cache, template được dùng NGAY bởi vbhc_fill_template (qua
+    _resolve_template_path → cache trước, bundled sau). Để chia sẻ cho máy
+    khác, dùng vbhc_publish_template (Phase 4) để push lên cloud KB Hub.
 
     AN TOÀN: nếu source FAIL bất kỳ mục ND30 nào → REFUSE save, trả lại issues.
 
@@ -1056,7 +1124,7 @@ def vbhc_update_template(
     if not slug:
         return {"error": f"target_loai_vb không hợp lệ: '{target_loai_vb}'"}
 
-    target = SKILL_DIR / "resources" / "templates" / f"{slug}.docx"
+    target = kc.cache_path_for("templates", f"{slug}.docx")
 
     # Validate ND30 trước khi cho phép save làm template chuẩn
     import learn_template as lt
@@ -1083,18 +1151,85 @@ def vbhc_update_template(
         return result
 
     if not confirmed:
-        warn = "⚠ File đích đã tồn tại — sẽ GHI ĐÈ. " if target.is_file() else ""
+        warn = "⚠ File đích đã tồn tại trong cache — sẽ GHI ĐÈ. " if target.is_file() else ""
         result["preview_message"] = (
-            f"Sẽ copy '{src.name}' → '{target.name}'. {warn}"
-            f"Gọi lại với confirmed=True để thực hiện."
+            f"Sẽ copy '{src.name}' → cache '{target}'. {warn}"
+            f"Gọi lại với confirmed=True để thực hiện. "
+            f"Để chia sẻ lên cloud cho máy khác: dùng vbhc_publish_template "
+            f"(Phase 4) sau khi cache ghi xong."
         )
         return result
 
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(str(src), str(target))
     result["applied"] = True
-    result["message"] = f"✓ Đã lưu template chuẩn tại {target}"
+    result["message"] = (
+        f"✓ Đã lưu template chuẩn vào cache: {target}. "
+        f"vbhc_fill_template dùng được ngay. Để chia sẻ cho máy khác: "
+        f"vbhc_publish_template('{slug}') (Phase 4)."
+    )
     return result
+
+
+# =====================================================================
+# Cloud sync tools (Phase 2)
+# =====================================================================
+
+@mcp.tool()
+def vbhc_sync_knowledge(force: bool = False, only: str | None = None) -> dict:
+    """Pull templates + rules + code bundle từ cloud KB Hub về ~/.vbhc/cache/.
+
+    Args:
+        force: pull cả khi cache còn fresh (TTL chưa hết).
+        only: chỉ pull 1 kind: "manifest", "templates", "rules", "code".
+              None = sync tất cả (recommended).
+
+    Returns:
+        dict với counts: templates/rules/code/errors. Sau khi sync, các tool
+        khác (vbhc_classify, vbhc_validate, ...) sẽ dùng version mới ở lần
+        gọi tiếp theo (rules_loader.clear_cache() được gọi tự động).
+    """
+    if not kc.is_configured():
+        return {
+            "error": "Chưa bootstrap — chạy `python -m mcp.bootstrap` trước, "
+                     "hoặc tạo ~/.vbhc/config.yaml với cloud_url + api_key."
+        }
+
+    try:
+        if only == "manifest":
+            info = kc.sync_manifest()
+            from rules_loader import clear_cache
+            clear_cache()
+            return {
+                "ok": True,
+                "manifest": {
+                    "status": info["status"],
+                    "templates": list((info["manifest"].get("templates") or {}).keys()),
+                    "rules": list((info["manifest"].get("rules") or {}).keys()),
+                    "code_version": (info["manifest"].get("code") or {}).get("version"),
+                },
+            }
+        summary = kc.sync_all()
+    except kc.KBError as e:
+        return {"error": str(e)}
+
+    # Buộc các rule YAML reload từ disk sau khi sync
+    from rules_loader import clear_cache
+    clear_cache()
+
+    return {"ok": True, **summary}
+
+
+@mcp.tool()
+def vbhc_knowledge_status() -> dict:
+    """Trả thông tin cache: bản local vs cloud, drift, last sync.
+
+    Returns:
+        dict với: configured, cloud_url, cached_assets (templates/rules có
+        trong cache), local_manifest (versions), cloud_manifest (nếu kết
+        nối được), drift (asset cần sync), last_sync (summary lần sync trước).
+    """
+    return kc.status()
 
 
 # =====================================================================

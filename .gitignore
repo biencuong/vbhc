@@ -20,6 +20,9 @@ ENV/
 Thumbs.db
 desktop.ini
 
+# Claude Code per-machine settings (permissions allowlist riêng máy)
+.claude/settings.local.json
+
 # Word/Office temp lock files
 ~$*.docx
 ~$*.doc

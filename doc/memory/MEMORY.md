@@ -1,0 +1,9 @@
+- [User domain](user_domain.md) — soạn văn bản hành chính VN theo Nghị định 30/2020/NĐ-CP
+- [Project goal](project_vbhc.md) — xây hệ MCP/template fill VBHC chuẩn Nghị định 30
+- [word MCP setup](mcp_word_setup.md) — đã cài word-mcp-live v1.6.2 (124 tools), scope user
+- [Template fill](project_template_fill.md) — convention folder `<NNNN>-<mô-tả>`, HD AI tự sắp xếp, workaround search_and_replace fail trên table cell
+- [Skill soan-thao-vbhc](skill_soan_thao_vbhc.md) — Skill + MCP `vbhc` đã build tại D:\SKILL_AI\skills\, 9 tools, đã push lên github.com/biencuong/vbhc, có deploy/ aaPanel
+- [Git push skill vbhc](git_push_skill_vbhc.md) — "đưa lên git" cho skill này = auto add+commit+push, không hỏi confirm; remote: github.com/biencuong/vbhc
+- [VPS deploy VBHC](vps_deploy_vbhc.md) — production endpoint mcp.hagiang.edu.vn, aaPanel + API key Bearer (v0.9.0+, file `/root/.vbhc/org/api-keys.yaml`, manage qua `scripts/manage_keys.py`)
+- [Feedback dùng mẫu sẵn](feedback_template_first.md) — Có file `Mau_*` trong `1-tham-chieu/` thì PHẢI lấy làm khung, chỉ thay thể thức ND30; không tạo lại từ đầu
+- [HANDOFF pointer](handoff_pointer.md) — D:\SKILL_AI\skills\soan-thao-vbhc\HANDOFF.md chứa full kiến trúc + helpers API + kỹ thuật học mẫu + bug đã gặp; đọc đầu phiên

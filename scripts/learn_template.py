@@ -24,6 +24,9 @@ sys.path.insert(0, str(Path(__file__).parent.resolve()))
 from docx import Document  # noqa: E402
 
 import validate_thethuc as vt  # noqa: E402
+import find_placeholders as fp  # noqa: E402
+import normalize_template as nt  # noqa: E402
+from rules_loader import load_rules  # noqa: E402
 
 
 # ============================================================
@@ -191,16 +194,29 @@ def assess_against_nd30(spec: dict, raw_text: str = "") -> list[dict]:
     sang template chuẩn (ví dụ: lề sai, font sai, typo, ...).
     """
     issues = []
-    # Kiểm tra ký tự "Đ" sai encoding: NĐ30 dùng "Độc" (Đ U+0110).
-    # Một số file convert từ .doc cũ chứa "Ð" U+00D0 — Word vẫn render giống
-    # nhưng KHÔNG search-and-replace được nếu code tìm "Đ" U+0110.
-    if "Ð" in raw_text:
-        issues.append({"level": "fix", "topic": "Ký tự Đ sai encoding",
-                       "message": "Phát hiện 'Ð' (U+00D0) — phải đổi sang 'Đ' (U+0110) khi chuẩn hóa"})
-    # Typo phổ biến: "kính giửi" → "kính gửi"
-    if "kính giửi" in raw_text:
-        issues.append({"level": "fix", "topic": "Lỗi chính tả",
-                       "message": "'kính giửi' → đúng là 'kính gửi'"})
+    # Typo + encoding fixes — load từ tri-thuc-template/rules/typo-fixes.yaml
+    # (fallback hardcode 2 rule cơ bản nếu YAML thiếu để giữ backward compat).
+    typo_data = load_rules("typo-fixes") or {
+        "encoding_fixes": [{
+            "find": "Ð",
+            "topic": "Ký tự Đ sai encoding",
+            "message": "Phát hiện 'Ð' (U+00D0) — phải đổi sang 'Đ' (U+0110) khi chuẩn hóa",
+            "level": "fix",
+        }],
+        "typo_fixes": [{
+            "find": "kính giửi",
+            "topic": "Lỗi chính tả",
+            "message": "'kính giửi' → đúng là 'kính gửi'",
+            "level": "fix",
+        }],
+    }
+    for rule in (typo_data.get("encoding_fixes") or []) + (typo_data.get("typo_fixes") or []):
+        if rule["find"] in raw_text:
+            issues.append({
+                "level": rule.get("level", "fix"),
+                "topic": rule.get("topic", "Lỗi chính tả"),
+                "message": rule.get("message", f"Phát hiện '{rule['find']}'"),
+            })
 
     m = spec["page"]["margins"]
     if (m["left_cm"], m["right_cm"], m["top_cm"], m["bottom_cm"]) == (3, 2, 2, 2):
@@ -312,12 +328,62 @@ def build_report(spec: dict, validation: list, issues: list) -> str:
         L.append(f"- {icon.get(iss['level'], '·')} **{iss['topic']}** — {iss['message']}")
     L.append("")
 
+    # NEW v0.10: Placeholders detected
+    L.append("## 8. Placeholders [KEY] phát hiện")
+    placeholders = spec.get("placeholders", {}).get("placeholders", [])
+    if placeholders:
+        L.append(f"Tổng: **{len(placeholders)}** placeholders unique. Liệt kê:")
+        for p in placeholders:
+            L.append(f"- `{p['key']}` — {p['count']} lần (vd: {p['occurs'][0]['snippet']})")
+    else:
+        L.append("- (file không có placeholder dạng `[KEY]` — đây có thể là VB đã fill đầy đủ, không phải template)")
+    L.append("")
+
+    # NEW v0.10: Auto-fixes sẽ áp dụng khi save làm template
+    L.append("## 9. Auto-fixes sẽ áp dụng (khi `vbhc_update_template`)")
+    auto = spec.get("auto_fixable", {})
+    if any(v > 0 for v in auto.values()):
+        for k, v in sorted(auto.items(), key=lambda x: -x[1]):
+            if v > 0:
+                L.append(f"- {k}: **{v}** lần")
+    else:
+        L.append("- (không có lỗi cơ học — file đã sạch)")
+    L.append("")
+
+    # NEW v0.10: Manual review needed
+    L.append("## 10. Cần user review thủ công (KHÔNG auto-fix)")
+    manual = spec.get("manual_review_needed", [])
+    if manual:
+        for it in manual:
+            L.append(f"- **{it['topic']}**: hiện tại `{it['current']}` — chuẩn `{it['expected']}`")
+            L.append(f"  → {it['action']}")
+    else:
+        L.append("- (không có)")
+    L.append("")
+
     return "\n".join(L)
 
 
 # ============================================================
 # Main
 # ============================================================
+
+def detect_manual_review(spec: dict) -> list[dict]:
+    """Detect các điểm CẦN USER REVIEW THỦ CÔNG (không auto-fix được).
+    Vd: lề khác chuẩn ND30 — có thể là phong cách cơ quan (VD lề 3.5cm cho VB
+    nhiều dấu mộc), hoặc đơn vị đo khác.
+    """
+    items = []
+    m = spec["page"]["margins"]
+    if (m["left_cm"], m["right_cm"], m["top_cm"], m["bottom_cm"]) != (3, 2, 2, 2):
+        items.append({
+            "topic": "Lề trang",
+            "current": f"trái {m['left_cm']} | phải {m['right_cm']} | trên {m['top_cm']} | dưới {m['bottom_cm']} cm",
+            "expected": "trái 3 | phải 2 | trên 2 | dưới 2 cm (NĐ30)",
+            "action": "User xác nhận có muốn đổi page setup không (giữ nguyên = phong cách cơ quan, sửa = chuẩn NĐ30)",
+        })
+    return items
+
 
 def learn(path: Path):
     doc = Document(str(path))
@@ -335,6 +401,11 @@ def learn(path: Path):
         "phong_soan": extract_phong_soan(text),
         "noi_nhan": extract_noi_nhan(text),
     }
+
+    # NEW v0.10: Placeholders + auto-fixable issues + manual review
+    spec["placeholders"] = fp.scan(path)
+    spec["auto_fixable"] = nt.dry_run(path)
+    spec["manual_review_needed"] = detect_manual_review(spec)
 
     validation = [
         ("1. Quốc hiệu + Tiêu ngữ",   vt.check_quoc_hieu(text)),

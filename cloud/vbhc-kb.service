@@ -1,0 +1,22 @@
+[Unit]
+Description=VBHC Knowledge Hub HTTP server (templates + rules + code bundle)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/mcp-soan-thao-vbhc
+Environment="VBHC_KB_DIR=/var/lib/vbhc-kb"
+Environment="VBHC_API_KEYS_FILE=/root/.vbhc/org/api-keys.yaml"
+Environment="PYTHONIOENCODING=utf-8"
+ExecStart=/home/mcp-soan-thao-vbhc/venv/bin/python \
+    /home/mcp-soan-thao-vbhc/cloud/kb_server.py \
+    --host 127.0.0.1 --port 8766
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
