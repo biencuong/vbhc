@@ -2,6 +2,25 @@
 
 > **Mục tiêu**: Chuyển `mcp.hagiang.edu.vn` từ v0.9 (HTTP MCP) sang v1.0 (Knowledge Hub). Sau deploy: endpoint cũ `/mcp` không còn — user buộc migrate sang local thin-MCP.
 
+## Trạng thái deploy (2026-05-12)
+
+Đang dở ở **Bước 5.2** — đã chuẩn bị Python script thay nginx config, chưa apply + reload.
+
+| Bước | Trạng thái | Note |
+|---|---|---|
+| 0. Backup | ✅ | nginx + api-keys + git SHA `677e9a4` (rollback target) |
+| 1. Checkout v1.0.0 | ✅ | HEAD = `2554a5b` (sau khi fix auth bug giữa deploy) |
+| 2. pip deps | ✅ | pyyaml 6.0.3, uvicorn 0.46.0, starlette 1.0.0 |
+| 3. Build KB_DIR | ✅ | `/var/lib/vbhc-kb/` — templates=3 rules=3 code=v1.0.0+02111fe7 |
+| 4. vbhc-kb.service | ✅ | port 8766, active. 4 endpoints test PASS local (200/401/401/200) |
+| **5. Nginx** | 🟡 **đang dở** | Python script tạo `.conf.new` đã chuẩn bị; cần diff + mv + reload |
+| 6. Stop vbhc-mcp + grant admin | ⏳ | |
+| 7. Test 1-liner máy mới | ⏳ | |
+
+**Bug fix giữa deploy** (commit `2554a5b`): orphan `_reject` (Phase 4 regression) + `BaseHTTPMiddleware` không tương thích Starlette 1.0 → rewrite pure ASGI. Sau fix, test 4 endpoints PASS.
+
+Tiếp tục: chạy Python script trong Bước 5.2 dưới đây để apply nginx.
+
 ## Tóm tắt thay đổi trên VPS
 
 | Hạng mục | v0.9 (đang chạy) | v1.0 (sau deploy) |
@@ -141,105 +160,119 @@ curl -i -H "Authorization: Bearer $KEY" http://127.0.0.1:8766/kb/manifest.json
 
 File: `/www/server/panel/vhost/nginx/mcp.hagiang.edu.vn.conf`
 
-### 5.1. Mở file để sửa
+### 5.1. Xem config hiện tại
 
 ```bash
-sudo nano /www/server/panel/vhost/nginx/mcp.hagiang.edu.vn.conf
-# hoặc: vim, code-server, v.v.
+cat /www/server/panel/vhost/nginx/mcp.hagiang.edu.vn.conf
 ```
 
-### 5.2. Xác định block hiện tại
+Verify có block `# >>> MCP reverse proxy - soan thao VBHC <<<` chứa `location ^~ /mcp` → 8765.
 
-Tìm 2 block:
-
-1. `#PROXY-START/...` ... `#PROXY-END/` — aaPanel auto-block (có thể có `location /mcp { proxy_pass http://127.0.0.1:8765; ... }`)
-2. Custom block `location /mcp` (nếu bạn đã sửa tay từ v0.9)
-
-### 5.3. Thay block reverse proxy
-
-**Xoá hết** các `location /mcp { ... }` cũ. **Thêm vào** trong block `server { ... }` (cùng cấp với các location khác, BÊN NGOÀI `#PROXY-START/.../#PROXY-END/`):
-
-```nginx
-# === vbhc Knowledge Hub v1.0 (port 8766) ===
-# Public: installer + uninstaller + healthz (KHÔNG cần auth)
-location = /install.ps1 {
-    proxy_pass http://127.0.0.1:8766/install.ps1;
-    proxy_http_version 1.1;
-    proxy_set_header Host 127.0.0.1:8766;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    add_header Cache-Control "no-cache" always;
-}
-
-location = /uninstall.ps1 {
-    proxy_pass http://127.0.0.1:8766/uninstall.ps1;
-    proxy_http_version 1.1;
-    proxy_set_header Host 127.0.0.1:8766;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    add_header Cache-Control "no-cache" always;
-}
-
-location = /healthz {
-    proxy_pass http://127.0.0.1:8766/healthz;
-    proxy_http_version 1.1;
-    proxy_set_header Host 127.0.0.1:8766;
-}
-
-# Auth-protected: knowledge + admin publish
-location /kb {
-    proxy_pass http://127.0.0.1:8766;
-    proxy_http_version 1.1;
-    proxy_set_header Host 127.0.0.1:8766;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-
-    # Cho phép body lớn cho POST template (max 10MB ở server-side)
-    client_max_body_size 12m;
-    proxy_request_buffering off;
-}
-
-# v0.9 endpoint /mcp đã bị gỡ ở v1.0 — trả 410 Gone với hint migrate
-location = /mcp {
-    return 410 "v0.9 /mcp endpoint đã bị gỡ ở v1.0. Migrate: https://github.com/biencuong/vbhc/blob/main/MIGRATION-v1.0.md";
-    add_header Content-Type "text/plain; charset=utf-8";
-}
-```
-
-> **Tại sao** `proxy_set_header Host 127.0.0.1:8766`: FastMCP/Starlette dùng TrustedHostMiddleware reject nếu Host header là domain ngoài. Mặc định `$host` sẽ là `mcp.hagiang.edu.vn` → reject.
-
-### 5.4. Test cấu hình + reload
+### 5.2. Tạo file `.new` bằng Python script (an toàn hơn sửa tay)
 
 ```bash
-sudo nginx -t
-# → "syntax is ok" + "test is successful"
+python3 - <<'PYEOF'
+import re, sys
 
-# Nếu OK, reload:
-sudo nginx -s reload
-# hoặc qua aaPanel: System → Service → Reload nginx
+path = "/www/server/panel/vhost/nginx/mcp.hagiang.edu.vn.conf"
+src = open(path).read()
+
+new_block = """    # >>> VBHC v1.0 Knowledge Hub <<<
+    location = /healthz {
+        proxy_pass http://127.0.0.1:8766/healthz;
+        proxy_http_version 1.1;
+        proxy_set_header Host 127.0.0.1:8766;
+    }
+
+    location = /install.ps1 {
+        proxy_pass http://127.0.0.1:8766/install.ps1;
+        proxy_http_version 1.1;
+        proxy_set_header Host 127.0.0.1:8766;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        add_header Cache-Control "no-cache" always;
+    }
+
+    location = /uninstall.ps1 {
+        proxy_pass http://127.0.0.1:8766/uninstall.ps1;
+        proxy_http_version 1.1;
+        proxy_set_header Host 127.0.0.1:8766;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        add_header Cache-Control "no-cache" always;
+    }
+
+    location ^~ /kb {
+        proxy_pass http://127.0.0.1:8766;
+        proxy_http_version 1.1;
+        proxy_set_header Host              127.0.0.1:8766;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 12m;
+        proxy_request_buffering off;
+        proxy_buffering         off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    # v0.9 endpoint /mcp da go o v1.0 — hint migrate
+    location = /mcp {
+        add_header Content-Type "text/plain; charset=utf-8" always;
+        return 410 "v0.9 /mcp endpoint da bi go. Migrate: https://github.com/biencuong/vbhc/blob/main/MIGRATION-v1.0.md";
+    }
+"""
+
+pattern = re.compile(
+    r'    # >>> MCP reverse proxy - soan thao VBHC <<<.*?\n      \}\n',
+    re.DOTALL
+)
+matches = pattern.findall(src)
+print(f"matched {len(matches)} old block(s) — expected 1")
+if len(matches) != 1:
+    sys.exit("ABORT: pattern không match đúng 1 block.")
+
+result = pattern.sub(new_block, src, count=1)
+open(path + ".new", "w").write(result)
+print(f"written: {path}.new")
+PYEOF
 ```
 
-Nếu có lỗi syntax: rollback bằng `sudo cp /www/server/panel/vhost/nginx/mcp.hagiang.edu.vn.conf.bak-pre-v1.0 /www/server/panel/vhost/nginx/mcp.hagiang.edu.vn.conf`.
+> **Tại sao** `proxy_set_header Host 127.0.0.1:8766`: FastMCP/Starlette dùng TrustedHostMiddleware reject nếu Host header là domain ngoài.
 
-### 5.5. Smoke test qua nginx (từ máy local)
+### 5.3. Review diff + apply
 
 ```bash
-# Từ máy bạn, hoặc trên VPS (curl localhost với Host header):
-curl -i https://mcp.hagiang.edu.vn/healthz
-# → 200 OK, JSON {"status":"ok","kb_dir":"/var/lib/vbhc-kb"}
-
-curl -sI https://mcp.hagiang.edu.vn/install.ps1
-# → 200 OK, Content-Type: text/plain; charset=utf-8
-
-curl -i https://mcp.hagiang.edu.vn/kb/manifest.json
-# → 401 Unauthorized (chưa Bearer) — đúng
-
-curl -sI -H "Authorization: Bearer <KEY>" https://mcp.hagiang.edu.vn/kb/manifest.json
-# → 200 OK
-
-curl -i https://mcp.hagiang.edu.vn/mcp
-# → 410 Gone với hint migrate
+diff /www/server/panel/vhost/nginx/mcp.hagiang.edu.vn.conf /www/server/panel/vhost/nginx/mcp.hagiang.edu.vn.conf.new
 ```
+
+Review: `-` xoá block `/mcp` cũ, `+` thêm 5 location mới (healthz, install.ps1, uninstall.ps1, /kb, /mcp 410).
+
+Apply:
+
+```bash
+mv /www/server/panel/vhost/nginx/mcp.hagiang.edu.vn.conf.new /www/server/panel/vhost/nginx/mcp.hagiang.edu.vn.conf
+nginx -t
+nginx -s reload
+```
+
+Nếu `nginx -t` báo lỗi: rollback bằng `cp /www/server/panel/vhost/nginx/mcp.hagiang.edu.vn.conf.bak-pre-v1.0 /www/server/panel/vhost/nginx/mcp.hagiang.edu.vn.conf && nginx -s reload`.
+
+### 5.4. Smoke test qua nginx (từ máy local hoặc trên VPS)
+
+```bash
+curl -sS -o /dev/null -w "healthz: %{http_code}\n" https://mcp.hagiang.edu.vn/healthz
+curl -sS -o /dev/null -w "install.ps1: %{http_code}\n" https://mcp.hagiang.edu.vn/install.ps1
+curl -sS -o /dev/null -w "uninstall.ps1: %{http_code}\n" https://mcp.hagiang.edu.vn/uninstall.ps1
+curl -sS -o /dev/null -w "kb noauth: %{http_code}\n" https://mcp.hagiang.edu.vn/kb/manifest.json
+curl -sS -o /dev/null -w "mcp old: %{http_code}\n" https://mcp.hagiang.edu.vn/mcp
+
+KEY=$(grep -m1 "^\s*key:" /root/.vbhc/org/api-keys.yaml | sed 's/.*key:\s*//; s/[[:space:]]*$//')
+curl -sS -o /dev/null -w "kb auth: %{http_code}\n" -H "Authorization: Bearer $KEY" https://mcp.hagiang.edu.vn/kb/manifest.json
+```
+
+Mong đợi: `200 / 200 / 200 / 401 / 410 / 200`.
 
 ---
 
